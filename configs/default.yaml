@@ -3,6 +3,7 @@ log:
   fileEnable: true
   printAsJson: false
   logLevel: "DEBUG"
+  highlightGps: true
   logDirectory: "./logs/"
   logFile: "jt808-server-go.log"
   maxSizeOfRolling: 50
@@ -15,6 +16,10 @@ server:
     tcpPort: "8080"
     udpPort: "8081"
     httpPort: "8008"
+    mediaPort: "1078"
+  media:
+    publicIp: "172.237.81.165"
+    rtpPort: 1078
   banner:
     enable: true
     bannerPath: "configs/banner.txt"

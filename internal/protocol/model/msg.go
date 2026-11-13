@@ -8,7 +8,11 @@ const (
 	MsgID0002 = 0x0002
 	MsgID0100 = 0x0100
 	MsgID0200 = 0x0200
+	MsgID0704 = 0x0704
+	MsgID0900 = 0x0900
 	MsgID8004 = 0x8004
+	MsgID9101 = 0x9101
+	MsgID9102 = 0x9102
 )
 
 var (

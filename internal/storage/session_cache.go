@@ -16,8 +16,9 @@ var ErrSessionClosed = errors.New("session closed")
 const monitorSessionCntInterval = 10 * time.Second
 
 type SessionCache struct {
-	cacheByID map[string]*model.Session
-	mutex     *sync.Mutex
+	cacheByID    map[string]*model.Session
+	cacheByPhone map[string]*model.Session
+	mutex        *sync.Mutex
 }
 
 var sessionCacheSingleton *SessionCache
@@ -27,8 +28,9 @@ var sessionCacheInitOnce sync.Once
 func getSessionCache() *SessionCache {
 	sessionCacheInitOnce.Do(func() {
 		sessionCacheSingleton = &SessionCache{
-			cacheByID: make(map[string]*model.Session),
-			mutex:     &sync.Mutex{},
+			cacheByID:    make(map[string]*model.Session),
+			cacheByPhone: make(map[string]*model.Session),
+			mutex:        &sync.Mutex{},
 		}
 		monitorSessionCnt() // 监控session个数
 	})
@@ -44,7 +46,7 @@ func monitorSessionCnt() {
 	})
 }
 
-// 通过id获取session。如果不存在，返回ErrSessionClosed(正常情况不会出现关闭session后还来获取session)
+// 通过id获取session。如果不存在，返回ErrSessionClosed
 func GetSession(id string) (*model.Session, error) {
 	c := getSessionCache()
 	c.mutex.Lock()
@@ -53,6 +55,36 @@ func GetSession(id string) (*model.Session, error) {
 		return s, nil
 	}
 	return nil, ErrSessionClosed
+}
+
+// 通过设备手机号/ID获取活跃session
+func GetSessionByPhone(phone string) (*model.Session, error) {
+	c := getSessionCache()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if s, ok := c.cacheByPhone[phone]; ok {
+		return s, nil
+	}
+	// Fallback: 如果服务端只有1个活跃连接，直接返回该活跃会话
+	if len(c.cacheByID) == 1 {
+		for _, s := range c.cacheByID {
+			return s, nil
+		}
+	}
+	return nil, ErrSessionClosed
+}
+
+// 绑定session与设备phone
+func BindSessionPhone(sessionID, phone string) {
+	if sessionID == "" || phone == "" {
+		return
+	}
+	c := getSessionCache()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if s, ok := c.cacheByID[sessionID]; ok {
+		c.cacheByPhone[phone] = s
+	}
 }
 
 // 缓存session
@@ -68,6 +100,13 @@ func ClearSession(id string) {
 	c := getSessionCache()
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if s, ok := c.cacheByID[id]; ok {
+		for phone, ps := range c.cacheByPhone {
+			if ps == s {
+				delete(c.cacheByPhone, phone)
+			}
+		}
+	}
 	delete(c.cacheByID, id)
 }
 

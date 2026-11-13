@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JT808 Live Device Monitor</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/flv.js/dist/flv.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+    header { padding: 12px 20px; background: #1e293b; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; z-index: 1000; }
+    header h1 { font-size: 16px; font-weight: 600; }
+    #status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; flex-shrink: 0; }
+    #status-dot.connected { background: #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    main { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+    #map { flex: 1; height: 100%; background: #1e293b; }
+
+    /* GPS Warning overlay */
+    #gps-warning {
+      display: none;
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(180, 83, 9, 0.95);
+      color: #fef3c7;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    aside { width: 340px; background: #1e293b; border-left: 1px solid #334155; overflow-y: auto; display: flex; flex-direction: column; }
+
+    .panel { padding: 16px; border-bottom: 1px solid #334155; }
+    .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 12px; }
+
+    .device-card { background: #0f172a; border-radius: 8px; padding: 12px; border: 1px solid #334155; }
+    .device-card.active { border-color: #3b82f6; }
+    .device-card .plate { font-size: 15px; font-weight: 700; color: #f8fafc; }
+    .device-card .phone { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+    .badge { display: inline-block; margin-top: 6px; font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+    .badge.online { background: #166534; color: #86efac; }
+    .badge.offline { background: #7f1d1d; color: #fca5a5; }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    .stat { background: #0f172a; border-radius: 6px; padding: 10px; border: 1px solid #1e293b; }
+    .stat .label { font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 600; }
+    .stat .value { font-size: 17px; font-weight: 700; margin-top: 2px; color: #38bdf8; }
+
+    .geo-row { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 0; border-bottom: 1px solid #334155; }
+    .geo-row .key { color: #94a3b8; }
+    .geo-row .val { font-weight: 600; color: #f1f5f9; }
+
+    .btn-group { display: flex; gap: 8px; margin-top: 14px; }
+    .btn {
+      flex: 1;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #93c5fd;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: #1e293b; border-color: #3b82f6; }
+
+    #no-device { padding: 24px 16px; font-size: 13px; color: #94a3b8; text-align: center; line-height: 1.6; }
+    #last-update { font-size: 11px; color: #64748b; padding: 12px 16px; margin-top: auto; border-top: 1px solid #334155; }
+
+    /* Dark theme for Leaflet layers control */
+    .leaflet-control-layers {
+      background: #1e293b !important;
+      color: #e2e8f0 !important;
+      border: 1px solid #334155 !important;
+      border-radius: 8px !important;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4) !important;
+      padding: 8px 12px !important;
+    }
+    .leaflet-control-layers label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    /* AI ADAS / DMS Badge & Card Styles */
+    .ai-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; }
+    .ai-badge.clear { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
+    .ai-badge.alert { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; animation: alert-pulse 1.2s infinite; }
+    @keyframes alert-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.85; transform: scale(1.03); } }
+
+    .ai-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      margin-bottom: 5px;
+      font-size: 11px;
+      transition: all 0.2s;
+    }
+    .ai-card.triggered {
+      border-color: #ef4444;
+      background: rgba(239, 68, 68, 0.12);
+    }
+
+    /* Video Camera Styles */
+    .video-container {
+      position: relative;
+      background: #090d16;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #334155;
+      margin-bottom: 8px;
+      aspect-ratio: 16 / 9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .video-container video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+      display: none;
+    }
+    .video-overlay {
+      position: absolute;
+      top: 6px;
+      left: 8px;
+      right: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .video-overlay .rec-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 9px;
+      font-weight: 700;
+      background: rgba(15, 23, 42, 0.75);
+      color: #94a3b8;
+    }
+    .video-overlay .rec-badge.live {
+      background: rgba(220, 38, 38, 0.9);
+      color: #fff;
+      animation: alert-pulse 1.2s infinite;
+    }
+    .video-overlay .ch-name {
+      font-size: 10px;
+      font-weight: 600;
+      color: #f1f5f9;
+      background: rgba(15, 23, 42, 0.75);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .video-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      font-size: 11px;
+      gap: 6px;
+      text-align: center;
+      padding: 12px;
+    }
+    .video-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+      overflow-x: auto;
+    }
+    .vtab {
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 5px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .vtab.active {
+      background: #2563eb;
+      color: #ffffff;
+      border-color: #3b82f6;
+    }
+    .vgrid-4 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .vgrid-4 .video-container {
+      margin-bottom: 0;
+      aspect-ratio: 4 / 3;
+    }
+    .video-ctrls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .vbtn {
+      flex: 1;
+      padding: 7px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      border: 1px solid #334155;
+      transition: all 0.2s;
+    }
+    .vbtn.start { background: #15803d; color: #bbf7d0; border-color: #16a34a; }
+    .vbtn.start:hover { background: #16a34a; }
+    .vbtn.stop { background: #991b1b; color: #fecaca; border-color: #dc2626; }
+    .vbtn.stop:hover { background: #b91c1c; }
+    .vbtn.secondary { flex: 0 0 32px; background: #0f172a; color: #94a3b8; }
+    .vbtn.secondary:hover { background: #1e293b; color: #f1f5f9; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div id="status-dot"></div>
+  <h1>JT808 Live Device Monitor</h1>
+  <span id="status-text" style="font-size:12px;color:#94a3b8;margin-left:auto">Waiting for device...</span>
+  <nav style="display:flex;gap:4px;margin-left:16px">
+    <a href="/ui" style="font-size:12px;padding:4px 12px;border-radius:4px;background:#2563eb;color:#fff;text-decoration:none;font-weight:500">Map</a>
+    <a href="/ui/logs.html" style="font-size:12px;padding:4px 12px;border-radius:4px;color:#94a3b8;text-decoration:none;font-weight:500">Server Logs</a>
+  </nav>
+</header>
+
+<main>
+  <div id="gps-warning">⚠️ GPS signal searching... Awaiting satellite fix (coordinates 0,0)</div>
+  <div id="map"></div>
+  <aside>
+    <div class="panel">
+      <h2>Connected Device</h2>
+      <div id="device-container">
+        <p id="no-device">
+          <b>No device connected</b><br/>
+          Make sure your dashcam or simulator is sending JT808 data to port 8080.
+        </p>
+      </div>
+    </div>
+
+    <!-- Live Cameras Panel (2CH / 4CH) -->
+    <div class="panel" id="video-panel" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <h2>Live Camera Feeds (2CH / 4CH)</h2>
+        <span id="video-status-badge" class="ai-badge clear">STANDBY</span>
+      </div>
+
+      <!-- Channel Tabs -->
+      <div class="video-tabs">
+        <button class="vtab active" id="tab-ch-1" onclick="switchVideoChannel(1)">CH1: Front</button>
+        <button class="vtab" id="tab-ch-2" onclick="switchVideoChannel(2)">CH2: Cabin</button>
+        <button class="vtab" id="tab-ch-3" onclick="switchVideoChannel(3)">CH3: Rear</button>
+        <button class="vtab" id="tab-ch-4" onclick="switchVideoChannel(4)">CH4: Aux</button>
+        <button class="vtab" id="tab-ch-quad" onclick="switchVideoView('quad')">4CH Quad</button>
+      </div>
+
+      <!-- Single Video View -->
+      <div id="single-video-wrap">
+        <div class="video-container" id="player-container-1">
+          <div class="video-overlay">
+            <span class="rec-badge" id="v-rec-badge">● STANDBY</span>
+            <span class="ch-name" id="v-ch-title">CH1: 1080P Front (ADAS)</span>
+          </div>
+          <video id="live-player" autoplay muted playsinline></video>
+          <div class="video-placeholder" id="v-placeholder">
+            <div style="font-size:24px;">📹</div>
+            <div><b>Camera Ready</b></div>
+            <div style="font-size:10px;color:#64748b;">Click "Start Stream" to wake up MDVR live video</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quad Grid (4CH) View -->
+      <div id="quad-video-wrap" style="display:none;" class="vgrid-4">
+        <div class="video-container">
+          <div class="video-overlay"><span class="ch-name">CH1: Front</span></div>
+          <video id="quad-player-1" autoplay muted playsinline></video>
+          <div class="video-placeholder" id="qp-ph-1"><div style="font-size:16px;">📹</div><div style="font-size:9px;">CH1 Front</div></div>
+        </div>
+        <div class="video-container">
+          <div class="video-overlay"><span class="ch-name">CH2: Cabin</span></div>
+          <video id="quad-player-2" autoplay muted playsinline></video>
+          <div class="video-placeholder" id="qp-ph-2"><div style="font-size:16px;">👤</div><div style="font-size:9px;">CH2 Cabin</div></div>
+        </div>
+        <div class="video-container">
+          <div class="video-overlay"><span class="ch-name">CH3: Rear</span></div>
+          <video id="quad-player-3" autoplay muted playsinline></video>
+          <div class="video-placeholder" id="qp-ph-3"><div style="font-size:16px;">🚗</div><div style="font-size:9px;">CH3 Rear</div></div>
+        </div>
+        <div class="video-container">
+          <div class="video-overlay"><span class="ch-name">CH4: Aux</span></div>
+          <video id="quad-player-4" autoplay muted playsinline></video>
+          <div class="video-placeholder" id="qp-ph-4"><div style="font-size:16px;">🔍</div><div style="font-size:9px;">CH4 Aux</div></div>
+        </div>
+      </div>
+
+      <!-- Streaming Controls -->
+      <div class="video-ctrls">
+        <button class="vbtn start" id="btn-start-stream" onclick="startCurrentStream()">▶️ Start Stream</button>
+        <button class="vbtn stop" id="btn-stop-stream" onclick="stopCurrentStream()" style="display:none;">⏹️ Stop Stream</button>
+        <button class="vbtn" id="btn-test-stream" onclick="toggleTestStream()" style="background:#334155;color:#38bdf8;" title="Preview video player with test stream">🧪 Test Stream</button>
+        <button class="vbtn secondary" onclick="toggleMediaSettings()" title="Stream Settings">⚙️</button>
+      </div>
+
+      <!-- Inline Settings Config -->
+      <div id="media-settings-panel" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px;margin-bottom:8px;font-size:11px;">
+        <div style="font-weight:600;color:#94a3b8;margin-bottom:4px;">Stream Settings (JT1078 RTP Ingest):</div>
+        <div style="display:flex;gap:6px;margin-bottom:4px;">
+          <input type="text" id="cfg-media-ip" value="172.237.81.165" placeholder="172.237.81.165" style="flex:2;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:4px 6px;border-radius:4px;font-size:10px;" />
+          <input type="number" id="cfg-media-port" placeholder="Port" value="1078" style="flex:1;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:4px 6px;border-radius:4px;font-size:10px;" />
+        </div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:6px;">
+          Target IP:Port sent in 0x9101 for MDVR 4G connection.
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <label style="color:#94a3b8;font-size:10px;">Quality:</label>
+          <select id="cfg-stream-type" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:3px 6px;border-radius:4px;font-size:10px;">
+            <option value="0">Main Stream (1080P)</option>
+            <option value="1" selected>Sub Stream (720P)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="detail-panel" style="display:none">
+      <h2>Live Telemetry</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="label">Speed</div>
+          <div class="value" id="d-speed">0.0 km/h</div>
+        </div>
+        <div class="stat">
+          <div class="label">Heading</div>
+          <div class="value" id="d-dir">0°</div>
+        </div>
+        <div class="stat">
+          <div class="label">Latitude</div>
+          <div class="value" id="d-lat" style="font-size:14px">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Longitude</div>
+          <div class="value" id="d-lng" style="font-size:14px">—</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="geo-row"><span class="key">Altitude</span><span class="val" id="d-alt">—</span></div>
+        <div class="geo-row"><span class="key">Engine (ACC)</span><span class="val" id="d-acc">—</span></div>
+        <div class="geo-row"><span class="key">GPS Positioning</span><span class="val" id="d-gps">—</span></div>
+        <div class="geo-row"><span class="key">Position Mode</span><span class="val" id="d-pos-mode">GPS / BDS</span></div>
+        <div class="geo-row"><span class="key">Terminal Phone</span><span class="val" id="d-phone">—</span></div>
+        <div class="geo-row"><span class="key">Vehicle Plate</span><span class="val" id="d-plate">—</span></div>
+        <div class="geo-row"><span class="key">Device IMEI</span><span class="val" id="d-imei">—</span></div>
+        <div class="geo-row"><span class="key">Mileage</span><span class="val" id="d-mileage">—</span></div>
+        <div class="geo-row"><span class="key">Satellites / Signal</span><span class="val" id="d-sat-sig">—</span></div>
+        <div class="geo-row" style="border:none"><span class="key">Last Packet Time</span><span class="val" id="d-time">—</span></div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn" onclick="recenterOnDevice()">🎯 Center Map</button>
+        <button class="btn" onclick="clearTrail()">🗑️ Clear Trail</button>
+      </div>
+    </div>
+
+    <!-- AI Safety & Camera Systems Panel -->
+    <div class="panel" id="ai-panel" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <h2>AI Safety & Camera Systems</h2>
+        <span id="ai-overall-badge" class="ai-badge clear">ALL CLEAR</span>
+      </div>
+
+      <!-- Active Alarms Banner -->
+      <div id="ai-alarm-banner" style="display:none;background:rgba(220,38,38,0.2);border:1px solid #ef4444;border-radius:6px;padding:8px;margin-bottom:12px;font-size:12px;color:#fca5a5;animation:alert-pulse 1.2s infinite;">
+        <b>⚠️ Active Alerts:</b>
+        <div id="ai-alarm-list" style="margin-top:4px;font-weight:600;font-size:11px;"></div>
+      </div>
+
+      <!-- ADAS Front Camera Section -->
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:#38bdf8;margin-bottom:6px;">
+          📹 ADAS (1080P Front Camera)
+        </div>
+        <div class="ai-card" id="card-fcw">
+          <span>🚗 Forward Collision (FCW)</span>
+          <span class="ai-badge clear" id="badge-fcw">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-ldw">
+          <span>🛣️ Lane Departure (LDW)</span>
+          <span class="ai-badge clear" id="badge-ldw">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-hmw">
+          <span>📏 Safe Distance (HMW)</span>
+          <span class="ai-badge clear" id="badge-hmw">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-pcw">
+          <span>🚶 Pedestrian Alert (PCW)</span>
+          <span class="ai-badge clear" id="badge-pcw">CLEAR</span>
+        </div>
+      </div>
+
+      <!-- DMS In-Cabin Driver Camera Section -->
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:#c084fc;margin-bottom:6px;">
+          👤 DMS (In-Cabin Driver Camera)
+        </div>
+        <div class="ai-card" id="card-fatigue">
+          <span>🥱 Driver Fatigue Detection</span>
+          <span class="ai-badge clear" id="badge-fatigue">NORMAL</span>
+        </div>
+        <div class="ai-card" id="card-phone">
+          <span>📱 Phone Usage Detection</span>
+          <span class="ai-badge clear" id="badge-phone">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-smoking">
+          <span>🚬 Smoking Detection</span>
+          <span class="ai-badge clear" id="badge-smoking">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-distraction">
+          <span>👀 Distracted Driving Alert</span>
+          <span class="ai-badge clear" id="badge-distraction">CLEAR</span>
+        </div>
+      </div>
+
+      <!-- Hardware Alarms Section -->
+      <div>
+        <div style="font-size:11px;font-weight:700;color:#f59e0b;margin-bottom:6px;">
+          🚨 Hardware Alarms
+        </div>
+        <div class="ai-card" id="card-sos">
+          <span>🆘 SOS Emergency Alarm</span>
+          <span class="ai-badge clear" id="badge-sos">CLEAR</span>
+        </div>
+        <div class="ai-card" id="card-power">
+          <span>⚡ Main Power Cut</span>
+          <span class="ai-badge clear" id="badge-power">NORMAL</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="last-update">Awaiting data...</div>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const API = ''
+
+// --- Google Maps Layers ---
+const googleRoadmap = L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+  maxZoom: 20,
+  subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+  attribution: '© Google Maps'
+})
+
+const googleSatellite = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+  maxZoom: 20,
+  subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+  attribution: '© Google Maps'
+})
+
+const googleTerrain = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
+  maxZoom: 20,
+  subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+  attribution: '© Google Maps'
+})
+
+// Initialize map with Google Roadmap as sole provider
+const map = L.map('map', {
+  center: [20.5937, 78.9629], // Default view centered on India
+  zoom: 5,
+  layers: [googleRoadmap]
+})
+
+// Layer control for switching Google Maps view modes
+const baseMaps = {
+  'Google Maps (Roadmap)': googleRoadmap,
+  'Google Maps (Satellite)': googleSatellite,
+  'Google Maps (Terrain)': googleTerrain
+}
+L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map)
+
+let activePhone = null
+let sseSource = null
+let deviceMarker = null
+let trailPolyline = null
+let trailPoints = []
+let latestLat = null
+let latestLng = null
+let hasCentered = false
+
+const statusDot = document.getElementById('status-dot')
+const statusText = document.getElementById('status-text')
+const gpsWarning = document.getElementById('gps-warning')
+
+function setConnected(ok, text) {
+  statusDot.className = ok ? 'connected' : ''
+  statusText.textContent = text || (ok ? 'Live Telemetry' : 'Disconnected')
+}
+
+// Custom vehicle marker icon
+function createVehicleIcon(heading) {
+  const rotation = heading || 0
+  return L.divIcon({
+    className: 'custom-vehicle-marker',
+    html: `
+      <div style="transform: rotate(${rotation}deg); width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none">
+          <circle cx="12" cy="12" r="11" fill="#2563eb" stroke="#ffffff" stroke-width="2"/>
+          <polygon points="12,4 18,17 12,14 6,17" fill="#ffffff" />
+        </svg>
+      </div>
+    `,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18]
+  })
+}
+
+// Fetch devices list from server
+async function loadDevices() {
+  try {
+    const res = await fetch(`${API}/device`)
+    const devices = await res.json()
+    const list = devices || []
+
+    renderDevice(list)
+
+    if (list.length > 0) {
+      // Automatically select the connected single device
+      const current = list[0]
+      if (activePhone !== current.phone) {
+        selectDevice(current.phone)
+      }
+    } else {
+      if (activePhone) {
+        setConnected(false, 'Device disconnected')
+      }
+    }
+  } catch (err) {
+    setConnected(false, 'Server unreachable')
+  }
+}
+
+function renderDevice(devices) {
+  const container = document.getElementById('device-container')
+  if (!devices || devices.length === 0) {
+    container.innerHTML = `
+      <p id="no-device">
+        <b>Waiting for device connection...</b><br/>
+        Connect your dashcam to port 8080.
+      </p>
+    `
+    document.getElementById('detail-panel').style.display = 'none'
+    const aiPanel = document.getElementById('ai-panel')
+    if (aiPanel) aiPanel.style.display = 'none'
+    const videoPanel = document.getElementById('video-panel')
+    if (videoPanel) videoPanel.style.display = 'none'
+    return
+  }
+
+  const d = devices[0]
+  const isOnline = d.status === 2 || d.status === 1
+  container.innerHTML = `
+    <div class="device-card active">
+      <div class="plate">${d.plate || 'Device: ' + d.phone}</div>
+      <div class="phone">SIM Phone / ID: ${d.phone}</div>
+      <span class="badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+    </div>
+  `
+}
+
+function selectDevice(phone) {
+  activePhone = phone
+  document.getElementById('detail-panel').style.display = 'block'
+  const aiPanel = document.getElementById('ai-panel')
+  if (aiPanel) aiPanel.style.display = 'block'
+  const videoPanel = document.getElementById('video-panel')
+  if (videoPanel) videoPanel.style.display = 'block'
+  document.getElementById('d-phone').textContent = phone
+
+  // Fetch device details
+  fetch(`${API}/device/${phone}/geo`).then(r => r.json()).then(d => {
+    document.getElementById('d-plate').textContent = d.Plate || '—'
+    document.getElementById('d-imei').textContent = d.IMEI || '—'
+  }).catch(() => {})
+
+  if (sseSource) sseSource.close()
+
+  // Subscribe to real-time device SSE stream
+  sseSource = new EventSource(`${API}/device/${phone}/geo/stream`)
+  sseSource.addEventListener('location', e => {
+    const geo = JSON.parse(e.data)
+    updateTelemetry(phone, geo)
+    updateMapLocation(phone, geo)
+    document.getElementById('last-update').textContent = 'Last update received at ' + new Date().toLocaleTimeString()
+    setConnected(true, 'Live Telemetry')
+  })
+
+  sseSource.onerror = () => {
+    setConnected(false, 'Reconnecting...')
+  }
+}
+
+function updateTelemetry(phone, geo) {
+  const lat = geo.location ? geo.location.latitude : 0
+  const lng = geo.location ? geo.location.longitude : 0
+  const speed = geo.drive ? geo.drive.speed : 0
+  const direction = geo.drive ? geo.drive.direction : 0
+  const altitude = geo.location ? geo.location.altitude : 0
+
+  document.getElementById('d-speed').textContent = speed.toFixed(1) + ' km/h'
+  document.getElementById('d-dir').textContent = direction + '°'
+  document.getElementById('d-lat').textContent = lat ? lat.toFixed(6) : '0.000000'
+  document.getElementById('d-lng').textContent = lng ? lng.toFixed(6) : '0.000000'
+  document.getElementById('d-alt').textContent = altitude + ' m'
+
+  if (geo.gis) {
+    document.getElementById('d-acc').innerHTML = geo.gis.accStatus === 1
+      ? '<span style="color:#4ade80">ON (Running)</span>'
+      : '<span style="color:#f87171">OFF (Idle)</span>'
+
+    document.getElementById('d-gps').innerHTML = geo.gis.locationStatus === 1
+      ? '<span style="color:#4ade80">Position Fixed (Valid)</span>'
+      : '<span style="color:#fbbf24">Searching Satellites</span>'
+  }
+
+  // Mileage and Satellites / Signal
+  if (geo.extra) {
+    const mileageEl = document.getElementById('d-mileage')
+    if (mileageEl) {
+      mileageEl.textContent = geo.extra.mileage !== undefined ? geo.extra.mileage.toFixed(1) + ' km' : '0.0 km'
+    }
+    const satSigEl = document.getElementById('d-sat-sig')
+    if (satSigEl) {
+      const sats = geo.extra.satellites !== undefined ? geo.extra.satellites : 0
+      const sig = geo.extra.signalStrength !== undefined ? geo.extra.signalStrength : 0
+      satSigEl.textContent = `${sats} Sats / ${sig} CSQ`
+    }
+  }
+
+  // AI Camera & Safety Systems
+  const aiPanel = document.getElementById('ai-panel')
+  if (aiPanel) aiPanel.style.display = 'block'
+  resetAIBadges()
+
+  let hasAlarm = false
+
+  // Standard Hardware Alarms
+  if (geo.alarms) {
+    if (geo.alarms.sosAlarm) {
+      setAlertBadge('card-sos', 'badge-sos', 'EMERGENCY SOS', true)
+      hasAlarm = true
+    }
+    if (geo.alarms.powerCut) {
+      setAlertBadge('card-power', 'badge-power', 'POWER CUT', true)
+      hasAlarm = true
+    }
+    if (geo.alarms.fatigueAlarm) {
+      setAlertBadge('card-fatigue', 'badge-fatigue', 'FATIGUE ALARM', true)
+      hasAlarm = true
+    }
+  }
+
+  // ADAS Camera Alerts
+  if (geo.adas && geo.adas.flagStatus !== 2) {
+    const t = geo.adas.alarmType
+    if (t === 1) { setAlertBadge('card-fcw', 'badge-fcw', 'FCW ALERT', true); hasAlarm = true }
+    else if (t === 2) { setAlertBadge('card-ldw', 'badge-ldw', 'LDW ALERT', true); hasAlarm = true }
+    else if (t === 3) { setAlertBadge('card-hmw', 'badge-hmw', 'SAFE DISTANCE', true); hasAlarm = true }
+    else if (t === 4) { setAlertBadge('card-pcw', 'badge-pcw', 'PEDESTRIAN', true); hasAlarm = true }
+  }
+
+  // DMS Driver Camera Alerts
+  if (geo.dms && geo.dms.flagStatus !== 2) {
+    const t = geo.dms.alarmType
+    if (t === 1) { setAlertBadge('card-fatigue', 'badge-fatigue', 'FATIGUE DETECTED', true); hasAlarm = true }
+    else if (t === 2) { setAlertBadge('card-phone', 'badge-phone', 'PHONE CALLING', true); hasAlarm = true }
+    else if (t === 3) { setAlertBadge('card-smoking', 'badge-smoking', 'SMOKING DETECTED', true); hasAlarm = true }
+    else if (t === 4) { setAlertBadge('card-distraction', 'badge-distraction', 'DISTRACTED', true); hasAlarm = true }
+  }
+
+  // Active alarms banner & overall badge
+  const banner = document.getElementById('ai-alarm-banner')
+  const overallBadge = document.getElementById('ai-overall-badge')
+  if (geo.activeAlarms && geo.activeAlarms.length > 0) {
+    if (banner) {
+      banner.style.display = 'block'
+      document.getElementById('ai-alarm-list').innerHTML = geo.activeAlarms.map(a => `• ${a}`).join('<br/>')
+    }
+    if (overallBadge) {
+      overallBadge.className = 'ai-badge alert'
+      overallBadge.textContent = 'ACTIVE ALARMS'
+    }
+  } else if (hasAlarm) {
+    if (banner) banner.style.display = 'none'
+    if (overallBadge) {
+      overallBadge.className = 'ai-badge alert'
+      overallBadge.textContent = 'WARNING'
+    }
+  } else {
+    if (banner) banner.style.display = 'none'
+    if (overallBadge) {
+      overallBadge.className = 'ai-badge clear'
+      overallBadge.textContent = 'ALL CLEAR'
+    }
+  }
+
+  if (geo.time) {
+    const dateObj = new Date(geo.time)
+    document.getElementById('d-time').textContent = !isNaN(dateObj.getTime())
+      ? dateObj.toLocaleString()
+      : geo.time
+  }
+}
+
+function resetAIBadges() {
+  setAlertBadge('card-fcw', 'badge-fcw', 'CLEAR', false)
+  setAlertBadge('card-ldw', 'badge-ldw', 'CLEAR', false)
+  setAlertBadge('card-hmw', 'badge-hmw', 'CLEAR', false)
+  setAlertBadge('card-pcw', 'badge-pcw', 'CLEAR', false)
+  setAlertBadge('card-fatigue', 'badge-fatigue', 'NORMAL', false)
+  setAlertBadge('card-phone', 'badge-phone', 'CLEAR', false)
+  setAlertBadge('card-smoking', 'badge-smoking', 'CLEAR', false)
+  setAlertBadge('card-distraction', 'badge-distraction', 'CLEAR', false)
+  setAlertBadge('card-sos', 'badge-sos', 'CLEAR', false)
+  setAlertBadge('card-power', 'badge-power', 'NORMAL', false)
+}
+
+function setAlertBadge(cardId, badgeId, text, isAlert) {
+  const card = document.getElementById(cardId)
+  const badge = document.getElementById(badgeId)
+  if (!card || !badge) return
+  if (isAlert) {
+    card.classList.add('triggered')
+    badge.className = 'ai-badge alert'
+    badge.textContent = text
+  } else {
+    card.classList.remove('triggered')
+    badge.className = 'ai-badge clear'
+    badge.textContent = text
+  }
+}
+
+function updateMapLocation(phone, geo) {
+  const lat = geo.location ? geo.location.latitude : 0
+  const lng = geo.location ? geo.location.longitude : 0
+  const direction = geo.drive ? geo.drive.direction : 0
+  const speed = geo.drive ? geo.drive.speed : 0
+
+  // Check if device has reported non-zero coordinates
+  if (!lat || !lng || (lat === 0 && lng === 0)) {
+    gpsWarning.style.display = 'block'
+    return
+  }
+  gpsWarning.style.display = 'none'
+
+  latestLat = lat
+  latestLng = lng
+
+  // Initialize or update Marker
+  const popupContent = `
+    <div style="font-family:system-ui;font-size:12px;line-height:1.6;color:#0f172a;min-width:160px;">
+      <strong style="font-size:14px;color:#1e3a8a;">${phone}</strong><br/>
+      <b>Speed:</b> ${speed.toFixed(1)} km/h<br/>
+      <b>Heading:</b> ${direction}°<br/>
+      <b>Lat, Lng:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}<br/>
+      <b>Time:</b> ${new Date().toLocaleTimeString()}
+    </div>
+  `
+
+  if (!deviceMarker) {
+    deviceMarker = L.marker([lat, lng], {
+      icon: createVehicleIcon(direction)
+    }).addTo(map).bindPopup(popupContent)
+
+    trailPolyline = L.polyline([], {
+      color: '#2563eb',
+      weight: 5,
+      opacity: 0.85,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map)
+
+    // First fix: center map at close zoom
+    map.setView([lat, lng], 17)
+    hasCentered = true
+  } else {
+    deviceMarker.setLatLng([lat, lng])
+    deviceMarker.setIcon(createVehicleIcon(direction))
+    deviceMarker.setPopupContent(popupContent)
+
+    if (!hasCentered) {
+      map.setView([lat, lng], 17)
+      hasCentered = true
+    }
+  }
+
+  // Add position to trail if moved
+  const lastPt = trailPoints.length ? trailPoints[trailPoints.length - 1] : null
+  const moved = !lastPt || Math.abs(lastPt[0] - lat) > 0.000005 || Math.abs(lastPt[1] - lng) > 0.000005
+
+  if (moved) {
+    trailPoints.push([lat, lng])
+    if (trailPoints.length > 500) trailPoints.shift()
+    trailPolyline.setLatLngs(trailPoints)
+  }
+}
+
+function recenterOnDevice() {
+  if (latestLat && latestLng) {
+    map.setView([latestLat, latestLng], 17)
+  }
+}
+
+// --- JT1078 Video Streaming Control ---
+let currentChannel = 1
+let isStreaming = false
+let currentViewMode = 'single'
+let activeFlvPlayers = []
+
+const channelNames = {
+  1: 'CH1: 1080P Front (ADAS)',
+  2: 'CH2: In-Cabin (DMS)',
+  3: 'CH3: Rear Camera',
+  4: 'CH4: Expansion Camera'
+}
+
+function switchVideoChannel(ch) {
+  currentChannel = ch
+  currentViewMode = 'single'
+  document.getElementById('single-video-wrap').style.display = 'block'
+  document.getElementById('quad-video-wrap').style.display = 'none'
+
+  for (let i = 1; i <= 4; i++) {
+    const tab = document.getElementById(`tab-ch-${i}`)
+    if (tab) tab.classList.toggle('active', i === ch)
+  }
+  const qTab = document.getElementById('tab-ch-quad')
+  if (qTab) qTab.classList.remove('active')
+
+  document.getElementById('v-ch-title').textContent = channelNames[ch] || `CH${ch}`
+
+  if (isStreaming) {
+    startCurrentStream()
+  }
+}
+
+function switchVideoView(mode) {
+  currentViewMode = mode
+  for (let i = 1; i <= 4; i++) {
+    const tab = document.getElementById(`tab-ch-${i}`)
+    if (tab) tab.classList.remove('active')
+  }
+  const qTab = document.getElementById('tab-ch-quad')
+  if (qTab) qTab.classList.add('active')
+
+  if (mode === 'quad') {
+    document.getElementById('single-video-wrap').style.display = 'none'
+    document.getElementById('quad-video-wrap').style.display = 'grid'
+    if (isStreaming) {
+      startQuadStreams()
+    }
+  }
+}
+
+async function startCurrentStream() {
+  if (!activePhone) return
+  if (currentViewMode === 'quad') {
+    return startQuadStreams()
+  }
+
+  const sIp = document.getElementById('cfg-media-ip').value.trim()
+  const sPort = parseInt(document.getElementById('cfg-media-port').value.trim()) || 1078
+  const streamType = parseInt(document.getElementById('cfg-stream-type').value) || 1
+
+  const placeholder = document.getElementById('v-placeholder')
+  placeholder.style.display = 'flex'
+  document.getElementById('live-player').style.display = 'none'
+  placeholder.innerHTML = `
+    <div style="font-size:22px;animation:alert-pulse 1s infinite;">⏳</div>
+    <div><b>Requesting MDVR Stream...</b></div>
+    <div style="font-size:10px;color:#94a3b8;">Sent JT1078 0x9101 (CH${currentChannel})</div>
+  `
+
+  try {
+    const res = await fetch(`${API}/device/${activePhone}/video/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channelNumber: currentChannel,
+        streamType: streamType,
+        serverIp: sIp,
+        tcpPort: sPort,
+        udpPort: sPort
+      })
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      let errMsg = text
+      try {
+        const j = JSON.parse(text)
+        if (j.err) errMsg = j.err
+      } catch (e) {}
+      if (res.status === 404) {
+        throw new Error("Route not found (HTTP 404). Please restart your Go server process (`go run main.go`) to load the new video routes!")
+      }
+      throw new Error(`HTTP ${res.status}: ${errMsg}`)
+    }
+
+    const data = await res.json()
+
+    isStreaming = true
+    document.getElementById('btn-start-stream').style.display = 'none'
+    document.getElementById('btn-stop-stream').style.display = 'flex'
+    document.getElementById('video-status-badge').className = 'ai-badge alert'
+    document.getElementById('video-status-badge').textContent = 'LIVE'
+    document.getElementById('v-rec-badge').className = 'rec-badge live'
+    document.getElementById('v-rec-badge').textContent = '● LIVE'
+
+    playStreamUrl(data.streamUrl, document.getElementById('live-player'), placeholder)
+  } catch (err) {
+    console.warn('Start stream error:', err)
+    placeholder.style.display = 'flex'
+    placeholder.innerHTML = `
+      <div style="font-size:24px;">🔌</div>
+      <div style="color:#f87171;font-weight:700;font-size:12px;">Device Offline / Session Closed</div>
+      <div style="font-size:10px;color:#94a3b8;margin:4px 0;max-width:260px;text-align:center;">
+        Dashcam connection dropped. Reconnect MDVR to port 8080 (or restart the SSH tunnel).
+      </div>
+      <button class="vbtn" onclick="toggleTestStream()" style="background:#0284c7;color:#fff;margin-top:6px;padding:4px 10px;font-size:10px;">
+        🧪 Preview With Test Stream
+      </button>
+    `
+    stopCurrentStream(false)
+  }
+}
+
+async function startQuadStreams() {
+  if (!activePhone) return
+  const sIp = document.getElementById('cfg-media-ip').value.trim()
+  const sPort = parseInt(document.getElementById('cfg-media-port').value.trim()) || 1078
+  const streamType = parseInt(document.getElementById('cfg-stream-type').value) || 1
+
+  destroyFlvPlayers()
+
+  isStreaming = true
+  document.getElementById('btn-start-stream').style.display = 'none'
+  document.getElementById('btn-stop-stream').style.display = 'flex'
+  document.getElementById('video-status-badge').className = 'ai-badge alert'
+  document.getElementById('video-status-badge').textContent = '4CH LIVE'
+
+  for (let ch = 1; ch <= 4; ch++) {
+    try {
+      const res = await fetch(`${API}/device/${activePhone}/video/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelNumber: ch,
+          streamType: streamType,
+          serverIp: sIp,
+          tcpPort: sPort,
+          udpPort: sPort
+        })
+      })
+      if (!res.ok) {
+        continue
+      }
+      const data = await res.json()
+      const vEl = document.getElementById(`quad-player-${ch}`)
+      const phEl = document.getElementById(`qp-ph-${ch}`)
+      playStreamUrl(data.streamUrl, vEl, phEl)
+    } catch (e) {}
+  }
+}
+
+function playStreamUrl(url, videoEl, placeholderEl) {
+  const fullUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`
+
+  if (videoEl) {
+    videoEl.muted = true
+    videoEl.playsInline = true
+
+    const markVideoPlaying = () => {
+      if (placeholderEl) placeholderEl.style.display = 'none'
+      videoEl.style.display = 'block'
+      const sBadge = document.getElementById('video-status-badge')
+      if (sBadge) {
+        sBadge.className = 'ai-badge alert'
+        sBadge.textContent = isTestingStream ? 'TEST LIVE' : 'LIVE'
+      }
+      const rBadge = document.getElementById('v-rec-badge')
+      if (rBadge) {
+        rBadge.className = 'rec-badge live'
+        rBadge.textContent = '● LIVE'
+      }
+    }
+
+    videoEl.onplaying = markVideoPlaying
+    videoEl.onloadeddata = markVideoPlaying
+    videoEl.oncanplay = markVideoPlaying
+  }
+
+  if (window.flvjs && flvjs.isSupported()) {
+    try {
+      const flvPlayer = flvjs.createPlayer({
+        type: 'flv',
+        isLive: true,
+        url: fullUrl,
+        hasAudio: false,
+        enableStashBuffer: false,
+        lazyLoad: false,
+        autoCleanupSourceBuffer: true
+      })
+      flvPlayer.attachMediaElement(videoEl)
+      flvPlayer.load()
+      flvPlayer.play().catch(e => console.warn('Autoplay caught:', e))
+      activeFlvPlayers.push(flvPlayer)
+
+      flvPlayer.on(flvjs.Events.MEDIA_INFO, (info) => {
+        console.log('FLV Media Info received:', info)
+        if (placeholderEl) placeholderEl.style.display = 'none'
+        if (videoEl) videoEl.style.display = 'block'
+      })
+
+      flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail) => {
+        console.warn('FLV stream info:', errType, errDetail)
+        if (placeholderEl && (!videoEl.videoWidth || videoEl.videoWidth === 0)) {
+          placeholderEl.style.display = 'flex'
+          const sIp = document.getElementById('cfg-media-ip') ? document.getElementById('cfg-media-ip').value : '172.237.81.165'
+          placeholderEl.innerHTML = `
+            <div style="font-size:22px;animation:alert-pulse 1.5s infinite;">⏳</div>
+            <div><b>Awaiting Stream Packets...</b></div>
+            <div style="font-size:10px;color:#94a3b8;">Sent 0x9101 to MDVR (CH${currentChannel})</div>
+            <div style="font-size:9px;color:#64748b;margin-top:2px;">Target: ${sIp}:1078</div>
+          `
+        }
+      })
+    } catch (e) {
+      console.warn('FLV Init:', e)
+    }
+  } else if (videoEl) {
+    videoEl.src = fullUrl
+    videoEl.play().catch(() => {})
+  }
+}
+
+let isTestingStream = false
+function toggleTestStream() {
+  const btn = document.getElementById('btn-test-stream')
+  if (!isTestingStream) {
+    isTestingStream = true
+    if (btn) {
+      btn.style.background = '#0284c7'
+      btn.textContent = '⏹️ Stop Test'
+    }
+    destroyFlvPlayers()
+
+    isStreaming = true
+    document.getElementById('btn-start-stream').style.display = 'none'
+    document.getElementById('btn-stop-stream').style.display = 'flex'
+    document.getElementById('video-status-badge').className = 'ai-badge alert'
+    document.getElementById('video-status-badge').textContent = 'TEST LIVE'
+
+    if (currentViewMode === 'quad') {
+      document.getElementById('single-video-wrap').style.display = 'none'
+      document.getElementById('quad-video-wrap').style.display = 'grid'
+      for (let ch = 1; ch <= 4; ch++) {
+        const vEl = document.getElementById(`quad-player-${ch}`)
+        const phEl = document.getElementById(`qp-ph-${ch}`)
+        playStreamUrl(`/live/test_${ch}.flv?test=true`, vEl, phEl)
+      }
+    } else {
+      document.getElementById('single-video-wrap').style.display = 'block'
+      document.getElementById('quad-video-wrap').style.display = 'none'
+      const vEl = document.getElementById('live-player')
+      const phEl = document.getElementById('v-placeholder')
+      playStreamUrl(`/live/test_${currentChannel}.flv?test=true`, vEl, phEl)
+    }
+  } else {
+    isTestingStream = false
+    if (btn) {
+      btn.style.background = '#334155'
+      btn.textContent = '🧪 Test Stream'
+    }
+    stopCurrentStream()
+  }
+}
+
+async function stopCurrentStream(resetPlaceholder = true) {
+  if (isTestingStream) {
+    isTestingStream = false
+    const btn = document.getElementById('btn-test-stream')
+    if (btn) {
+      btn.style.background = '#334155'
+      btn.textContent = '🧪 Test Stream'
+    }
+  }
+  if (!activePhone && !isStreaming) return
+
+  if (currentViewMode === 'quad') {
+    for (let ch = 1; ch <= 4; ch++) {
+      try {
+        await fetch(`${API}/device/${activePhone}/video/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channelNumber: ch })
+        })
+      } catch (e) {}
+    }
+  } else {
+    try {
+      await fetch(`${API}/device/${activePhone}/video/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelNumber: currentChannel })
+      })
+    } catch (e) {}
+  }
+
+  isStreaming = false
+  destroyFlvPlayers()
+
+  const livePlayer = document.getElementById('live-player')
+  if (livePlayer) livePlayer.style.display = 'none'
+  const ph = document.getElementById('v-placeholder')
+  if (ph && resetPlaceholder) {
+    ph.style.display = 'flex'
+    ph.innerHTML = `
+      <div style="font-size:24px;">📹</div>
+      <div><b>Camera Ready</b></div>
+      <div style="font-size:10px;color:#64748b;">Click "Start Stream" to wake up MDVR live video</div>
+    `
+  }
+
+  for (let ch = 1; ch <= 4; ch++) {
+    const qp = document.getElementById(`quad-player-${ch}`)
+    if (qp) qp.style.display = 'none'
+    const qph = document.getElementById(`qp-ph-${ch}`)
+    if (qph) qph.style.display = 'flex'
+  }
+
+  document.getElementById('btn-start-stream').style.display = 'flex'
+  document.getElementById('btn-stop-stream').style.display = 'none'
+  document.getElementById('video-status-badge').className = 'ai-badge clear'
+  document.getElementById('video-status-badge').textContent = 'STANDBY'
+  document.getElementById('v-rec-badge').className = 'rec-badge'
+  document.getElementById('v-rec-badge').textContent = '● STANDBY'
+}
+
+function destroyFlvPlayers() {
+  activeFlvPlayers.forEach(p => {
+    try {
+      p.pause()
+      p.unload()
+      p.detachMediaElement()
+      p.destroy()
+    } catch (e) {}
+  })
+  activeFlvPlayers = []
+}
+
+function toggleMediaSettings() {
+  const p = document.getElementById('media-settings-panel')
+  if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none'
+}
+
+// Initial load & poll for device state
+loadDevices()
+setInterval(loadDevices, 5000)
+</script>
+</body>
+</html>

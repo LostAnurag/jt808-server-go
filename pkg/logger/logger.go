@@ -23,6 +23,9 @@ type Config struct {
 	// Enable console logging
 	ConsoleLoggingEnabled bool
 
+	// Highlight GPS packets in console
+	HighlightGPS bool
+
 	// EncodeLogsAsJSON makes the framework log JSON
 	EncodeLogsAsJSON bool
 
@@ -61,18 +64,30 @@ type Logger struct {
 //
 // The output log file will be located at /var/log/service-xyz/service-xyz.log and
 // will be rolled according to configuration set.
+var highlightGPS = true
+
+func SetHighlightGPS(enabled bool) {
+	highlightGPS = enabled
+}
+
+func IsHighlightGPSEnabled() bool {
+	return highlightGPS
+}
+
 func Configure(config *Config) *Logger {
 	var writers []io.Writer
 
+	SetHighlightGPS(config.HighlightGPS)
+
 	if config.ConsoleLoggingEnabled {
-		writers = append(writers, newConsoleWriter(os.Stderr))
+		writers = append(writers, newConsoleWriter(os.Stderr, false))
 	}
 	if config.FileLoggingEnabled {
 		fw := newRollingFile(config)
 		if config.EncodeLogsAsJSON {
 			writers = append(writers, fw)
 		} else {
-			writers = append(writers, newConsoleWriter(fw))
+			writers = append(writers, newConsoleWriter(fw, true))
 		}
 	}
 	mw := io.MultiWriter(writers...)
@@ -89,6 +104,7 @@ func Configure(config *Config) *Logger {
 	logger.Info().
 		Bool("fileLogging", config.FileLoggingEnabled).
 		Bool("jsonLogOutput", config.EncodeLogsAsJSON).
+		Bool("highlightGPS", config.HighlightGPS).
 		Str("logDirectory", config.Directory).
 		Str("fileName", config.Filename).
 		Int("maxSizeMB", config.MaxSize).
@@ -101,11 +117,11 @@ func Configure(config *Config) *Logger {
 	}
 }
 
-func newConsoleWriter(writer io.Writer) *zerolog.ConsoleWriter {
+func newConsoleWriter(writer io.Writer, noColor bool) *zerolog.ConsoleWriter {
 	// log output should be stderr, and stdout should be program output
 	consoleWriter := zerolog.ConsoleWriter{
 		Out:        writer,
-		NoColor:    true,
+		NoColor:    noColor,
 		TimeFormat: time.RFC3339Nano,
 	}
 	consoleWriter.FormatLevel = func(i any) string {

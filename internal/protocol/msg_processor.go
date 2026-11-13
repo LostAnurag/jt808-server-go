@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,18 @@ func initProcessOption() processOptions {
 			return &model.ProcessData{Incoming: &model.Msg0200{}, Outgoing: &model.Msg8001{}}
 		},
 		process: processMsg0200,
+	}
+	options[0x0704] = &action{ // 定位数据批量上传
+		genData: func() *model.ProcessData {
+			return &model.ProcessData{Incoming: &model.Msg0704{}, Outgoing: &model.Msg8001{}}
+		},
+		process: processMsg0704,
+	}
+	options[0x0900] = &action{ // 数据上行透传
+		genData: func() *model.ProcessData {
+			return &model.ProcessData{Incoming: &model.Msg0900{}, Outgoing: &model.Msg8001{}}
+		},
+		process: processMsg0900,
 	}
 	options[0x1205] = &action{ // 终端上传音视频资源列表
 		genData: func() *model.ProcessData {
@@ -160,6 +173,18 @@ func (mp *JT808MsgProcessor) Process(ctx context.Context, pkt *model.PacketData)
 	err := in.Decode(pkt)
 	if err != nil {
 		return nil, errors.Wrap(err, "Fail to decode packet to jtmsg")
+	}
+
+	phone := in.GetHeader().PhoneNumber
+	if sessionVal := ctx.Value(model.SessionCtxKey{}); sessionVal != nil {
+		if session, ok := sessionVal.(*model.Session); ok && session != nil && phone != "" {
+			storage.BindSessionPhone(session.ID, phone)
+			dCache := storage.GetDeviceCache()
+			if dev, err := dCache.GetDeviceByPhone(phone); err == nil && dev != nil {
+				dev.SessionID = session.ID
+				dev.Conn = session.Conn
+			}
+		}
 	}
 
 	if log.Logger.GetLevel() == zerolog.DebugLevel {
@@ -263,26 +288,16 @@ func processMsg0003(_ context.Context, data *model.ProcessData) error {
 	return nil
 }
 
-// 收到注册，应校验设备ID，如果可注册，则缓存设备信息并返回鉴权码
+// 收到注册，如果已注册则更新会话信息，始终返回成功及鉴权码
 func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 	in := data.Incoming.(*model.Msg0100)
 
 	cache := storage.GetDeviceCache()
-	// 校验注册逻辑
 	out := data.Outgoing.(*model.Msg8100)
-	// 车辆已被注册
-	if cache.HasPlate(in.PlateNumber) {
-		out.Result = model.ResCarAlreadyRegister
-		return nil
-	}
-	// 终端已被注册
-	if cache.HasPhone(in.Header.PhoneNumber) {
-		out.Result = model.ResDeviceAlreadyRegister
-		return nil
-	}
 
 	session := ctx.Value(model.SessionCtxKey{}).(*model.Session)
 	device := model.NewDevice(in, session)
+	out.Result = model.ResSuccess
 	out.AuthCode = genAuthCode(device) // 设置鉴权码
 
 	cache.CacheDevice(device)
@@ -342,18 +357,56 @@ func processMsg0104(_ context.Context, _ *model.ProcessData) error {
 	return nil
 }
 
-// 收到位置信息汇报，回复通用应答
-func processMsg0200(_ context.Context, data *model.ProcessData) error {
-	in := data.Incoming.(*model.Msg0200)
+// 收到数据上行透传 (0x0900)，更新终端心跳并回复平台通用应答 (0x8001)
+func processMsg0900(_ context.Context, data *model.ProcessData) error {
+	cache := storage.GetDeviceCache()
+	phone := data.Incoming.GetHeader().PhoneNumber
+	device, err := cache.GetDeviceByPhone(phone)
+	if err == nil && device != nil {
+		device.LastestComTime = time.Now()
+		cache.CacheDevice(device)
+	}
+	return nil
+}
 
+// 处理单条位置信息汇报
+func processSingleMsg0200(ctx context.Context, in *model.Msg0200, rawJT808 []byte) error {
 	cache := storage.GetDeviceCache()
 	device, err := cache.GetDeviceByPhone(in.Header.PhoneNumber)
-	// 缓存不存在，说明设备不合法，需要返回错误，让服务层处理关闭
 	if errors.Is(err, storage.ErrDeviceNotFound) {
+		var conn net.Conn
+		var sessionID string
+		if ctx != nil {
+			if sessionVal := ctx.Value(model.SessionCtxKey{}); sessionVal != nil {
+				if session, ok := sessionVal.(*model.Session); ok && session != nil {
+					conn = session.Conn
+					sessionID = session.ID
+				}
+			}
+		}
+		device = &model.Device{
+			Phone:          in.Header.PhoneNumber,
+			SessionID:      sessionID,
+			Conn:           conn,
+			LastestComTime: time.Now(),
+			Status:         model.DeviceStatusOnline,
+			Keepalive:      time.Minute * 10,
+		}
+		cache.CacheDevice(device)
+	} else if err != nil {
 		return errors.Wrapf(err, "Fail to find device cache, phoneNumber=%s", in.Header.PhoneNumber)
+	} else {
+		if ctx != nil {
+			if sessionVal := ctx.Value(model.SessionCtxKey{}); sessionVal != nil {
+				if session, ok := sessionVal.(*model.Session); ok && session != nil {
+					device.Conn = session.Conn
+					device.SessionID = session.ID
+				}
+			}
+		}
 	}
 
-	// 解析状态位编码
+	// 解析状态位编码及报警附加信息
 	dg := &model.DeviceGeo{}
 	err = dg.Decode(device.Phone, in)
 	if err != nil {
@@ -362,13 +415,59 @@ func processMsg0200(_ context.Context, data *model.ProcessData) error {
 
 	if dg.Geo.ACCStatus == 0 { // ACC关闭，设备休眠
 		device.Status = model.DeviceStatusSleeping
-		device.LastestComTime = time.Now()
-		cache.CacheDevice(device)
+	} else {
+		device.Status = model.DeviceStatusOnline
 	}
+	device.LastestComTime = time.Now()
+	cache.CacheDevice(device)
 
 	geoCache := storage.GetGeoCache()
 	rb := geoCache.GetGeoRingByPhone(device.Phone)
 	rb.Write(dg)
+
+	// Console log GPS packet in JSON and JT808 with highlights
+	LogGPSPacket(rawJT808, in, dg, false)
+
+	return nil
+}
+
+// 收到位置信息汇报，回复通用应答
+func processMsg0200(ctx context.Context, data *model.ProcessData) error {
+	in := data.Incoming.(*model.Msg0200)
+
+	// Extract raw JT808 frame if present in context
+	var rawJT808 []byte
+	if ctx != nil {
+		if fp, ok := ctx.Value(model.FrameCtxKey{}).(FramePayload); ok {
+			rawJT808 = fp
+		}
+	}
+
+	return processSingleMsg0200(ctx, in, rawJT808)
+}
+
+// 收到定位数据批量上传 (0x0704)，逐条处理并回复通用应答
+func processMsg0704(ctx context.Context, data *model.ProcessData) error {
+	in := data.Incoming.(*model.Msg0704)
+
+	var rawJT808 []byte
+	if ctx != nil {
+		if fp, ok := ctx.Value(model.FrameCtxKey{}).(FramePayload); ok {
+			rawJT808 = fp
+		}
+	}
+
+	log.Info().
+		Str("phone", in.Header.PhoneNumber).
+		Uint16("count", in.Count).
+		Uint8("type", in.Type).
+		Msg("Processing batch location upload (0x0704)")
+
+	for _, item := range in.Items {
+		if err := processSingleMsg0200(ctx, item, rawJT808); err != nil {
+			log.Warn().Err(err).Str("phone", in.Header.PhoneNumber).Msg("Failed to process item in Msg0704 batch")
+		}
+	}
 
 	return nil
 }

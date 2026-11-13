@@ -54,7 +54,7 @@ func TestJT808PacketCodec_Decode(t *testing.T) {
 					Frag:            nil,
 				},
 				Body:       hex.Str2Byte("000000000002080301CD779E0728C032003C0000008F230125145158"),
-				VerifyCode: 126,
+				VerifyCode: 251,
 			},
 			wantErr: false,
 		},

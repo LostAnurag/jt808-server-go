@@ -12,6 +12,7 @@ import (
 
 	"github.com/fakeyanss/jt808-server-go/internal/client"
 	"github.com/fakeyanss/jt808-server-go/internal/config"
+	"github.com/fakeyanss/jt808-server-go/internal/protocol"
 	"github.com/fakeyanss/jt808-server-go/internal/protocol/model"
 	"github.com/fakeyanss/jt808-server-go/internal/storage"
 	"github.com/fakeyanss/jt808-server-go/pkg/logger"
@@ -93,6 +94,7 @@ func reportLocation(ctx context.Context, cli *client.TCPClient) {
 		deviceGeo, err := geoCache.GetGeoLatestByPhone(device.Phone)
 		if err == nil {
 			msg := datagen.GenMsg0200(deviceGeoConf, device, deviceGeo)
+			protocol.LogGPSPacket(nil, msg, deviceGeo, true)
 			cli.Send(msg)
 		}
 		select {

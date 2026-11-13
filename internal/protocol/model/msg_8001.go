@@ -50,8 +50,9 @@ func (m *Msg8001) GenOutgoing(incoming JT808Msg) error {
 	m.AnswerMessageID = header.MsgID
 	m.Result = 0
 
-	m.Header = header
-	m.Header.MsgID = 0x8001
+	headerClone := *header
+	headerClone.MsgID = 0x8001
+	m.Header = &headerClone
 
 	return nil
 }

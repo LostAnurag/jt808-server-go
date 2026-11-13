@@ -47,7 +47,7 @@ func NewDevice(in *Msg0100, session *Session) *Device {
 		SessionID:       session.ID,
 		TransProto:      session.GetTransProto(),
 		Conn:            session.Conn,
-		Keepalive:       time.Minute * 1,
+		Keepalive:       time.Minute * 10,
 		LastestComTime:  time.Now(),
 		Status:          DeviceStatusOffline,
 		VersionDesc:     in.Header.Attr.VersionDesc,
@@ -67,11 +67,16 @@ func (d *Device) ShouldClear() bool {
 
 // 终端设备地理位置状态相关信息
 type DeviceGeo struct {
-	Phone    string    `json:"phone"`
-	Geo      *GeoMeta  `json:"gis"`
-	Location *Location `json:"location"`
-	Drive    *Drive    `json:"drive"`
-	Time     time.Time `json:"time"`
+	Phone        string      `json:"phone"`
+	Geo          *GeoMeta    `json:"gis"`
+	Location     *Location   `json:"location"`
+	Drive        *Drive      `json:"drive"`
+	Alarms       *AlarmMeta  `json:"alarms"`
+	ADAS         *ADASAlert  `json:"adas,omitempty"`
+	DMS          *DMSAlert   `json:"dms,omitempty"`
+	Extra        *ExtraInfo  `json:"extra,omitempty"`
+	ActiveAlarms []string    `json:"activeAlarms"`
+	Time         time.Time   `json:"time"`
 }
 
 func (dg *DeviceGeo) Decode(phone string, m *Msg0200) error {
@@ -79,12 +84,49 @@ func (dg *DeviceGeo) Decode(phone string, m *Msg0200) error {
 	geoMetaInstance := &GeoMeta{}
 	geoMetaInstance.Decode(m.StatusSign)
 	dg.Geo = geoMetaInstance
+
 	locInstance := &Location{}
 	locInstance.Decode(m)
 	dg.Location = locInstance
+
 	driveInstance := &Drive{}
 	driveInstance.Decode(m)
 	dg.Drive = driveInstance
+
+	alarmInstance := &AlarmMeta{}
+	alarmInstance.Decode(m.AlarmSign)
+	dg.Alarms = alarmInstance
+
+	dg.ADAS = m.ADAS
+	dg.DMS = m.DMS
+	dg.Extra = m.Extra
+
+	dg.ActiveAlarms = make([]string, 0)
+	if dg.Alarms.SOSAlarm {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "SOS Emergency Alarm")
+	}
+	if dg.Alarms.FatigueAlarm {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "Fatigue Driving")
+	}
+	if dg.Alarms.OverspeedAlarm {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "Overspeed Warning")
+	}
+	if dg.Alarms.PowerCut {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "Main Power Cut")
+	}
+	if dg.Alarms.PowerLow {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "Power Low")
+	}
+	if dg.Alarms.CollisionWarn {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "Collision Warning")
+	}
+	if dg.ADAS != nil && dg.ADAS.FlagStatus != 2 && dg.ADAS.AlarmTypeName != "" {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "ADAS: "+dg.ADAS.AlarmTypeName)
+	}
+	if dg.DMS != nil && dg.DMS.FlagStatus != 2 && dg.DMS.AlarmTypeName != "" {
+		dg.ActiveAlarms = append(dg.ActiveAlarms, "DMS: "+dg.DMS.AlarmTypeName)
+	}
+
 	dg.Time = hex.ParseTime(m.Time)
 	return nil
 }
@@ -217,5 +259,33 @@ func (g *GeoMeta) Encode() uint32 {
 	return bitNum
 }
 
-type alarmMeta struct {
+// 报警标志位 (JT/T 808 表18)
+type AlarmMeta struct {
+	RawAlarmSign   uint32 `json:"rawAlarmSign"`
+	SOSAlarm       bool   `json:"sosAlarm"`       // bit 0: 紧急报警 (触动报警开关后触发)
+	OverspeedAlarm bool   `json:"overspeedAlarm"` // bit 1: 超速报警
+	FatigueAlarm   bool   `json:"fatigueAlarm"`   // bit 2: 疲劳驾驶
+	DangerWarning  bool   `json:"dangerWarning"`  // bit 3: 危险预警
+	GNSSFailure    bool   `json:"gnssFailure"`    // bit 4: GNSS模块故障
+	GNSSAntennaCut bool   `json:"gnssAntennaCut"` // bit 5: GNSS天线未接或剪断
+	PowerLow       bool   `json:"powerLow"`       // bit 7: 主电源欠压
+	PowerCut       bool   `json:"powerCut"`       // bit 8: 主电源掉电
+	CameraFailure  bool   `json:"cameraFailure"`  // bit 11: 摄像头故障
+	CollisionWarn  bool   `json:"collisionWarn"`  // bit 28/29: 碰撞预警
+	RolloverWarn   bool   `json:"rolloverWarn"`   // bit 30: 侧翻预警
+}
+
+func (a *AlarmMeta) Decode(alarmSign uint32) {
+	a.RawAlarmSign = alarmSign
+	a.SOSAlarm = (alarmSign & (1 << 0)) != 0
+	a.OverspeedAlarm = (alarmSign & (1 << 1)) != 0
+	a.FatigueAlarm = (alarmSign & (1 << 2)) != 0
+	a.DangerWarning = (alarmSign & (1 << 3)) != 0
+	a.GNSSFailure = (alarmSign & (1 << 4)) != 0
+	a.GNSSAntennaCut = (alarmSign & (1 << 5)) != 0
+	a.PowerLow = (alarmSign & (1 << 7)) != 0
+	a.PowerCut = (alarmSign & (1 << 8)) != 0
+	a.CameraFailure = (alarmSign & (1 << 11)) != 0
+	a.CollisionWarn = (alarmSign&(1<<28)) != 0 || (alarmSign&(1<<29)) != 0
+	a.RolloverWarn = (alarmSign & (1 << 30)) != 0
 }

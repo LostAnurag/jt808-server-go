@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JT808 Logs</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; }
+
+    header { padding: 12px 20px; background: #1e293b; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; font-weight: 600; }
+    #status-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; flex-shrink: 0; }
+    #status-dot.on { background: #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
+
+    nav { display: flex; gap: 4px; margin-left: auto; }
+    nav a { font-size: 12px; padding: 4px 10px; border-radius: 4px; color: #94a3b8; text-decoration: none; }
+    nav a:hover { background: #334155; color: #e2e8f0; }
+    nav a.active { background: #1d4ed8; color: #fff; }
+
+    .toolbar { padding: 8px 16px; background: #1e293b; border-bottom: 1px solid #334155; display: flex; gap: 8px; align-items: center; }
+    .toolbar input { flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 4px 10px; color: #e2e8f0; font-size: 12px; outline: none; }
+    .toolbar input:focus { border-color: #3b82f6; }
+    .toolbar label { font-size: 12px; color: #94a3b8; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    button { font-size: 12px; padding: 4px 12px; border-radius: 4px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; }
+    button:hover { background: #334155; }
+
+    #log-container { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: 'Menlo', 'Monaco', monospace; font-size: 12px; line-height: 1.6; }
+
+    .log-line { padding: 1px 0; white-space: pre-wrap; word-break: break-all; border-bottom: 1px solid #1e293b; }
+    .log-line.DEBUG { color: #94a3b8; }
+    .log-line.INFO  { color: #60a5fa; }
+    .log-line.WARN  { color: #fbbf24; }
+    .log-line.ERROR { color: #f87171; }
+    .log-line.hidden { display: none; }
+
+    #count { font-size: 11px; color: #475569; margin-left: auto; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div id="status-dot"></div>
+  <h1>JT808 Server Logs</h1>
+  <nav>
+    <a href="/ui">Map</a>
+    <a href="/ui/logs.html" class="active">Logs</a>
+  </nav>
+</header>
+
+<div class="toolbar">
+  <input id="filter" type="text" placeholder="Filter logs..." />
+  <label><input type="checkbox" id="chk-debug" checked> DEBUG</label>
+  <label><input type="checkbox" id="chk-info" checked> INFO</label>
+  <label><input type="checkbox" id="chk-warn" checked> WARN</label>
+  <label><input type="checkbox" id="chk-error" checked> ERROR</label>
+  <button onclick="clearLogs()">Clear</button>
+  <span id="count">0 lines</span>
+</div>
+
+<div id="log-container"></div>
+
+<script>
+const container = document.getElementById('log-container')
+const filterInput = document.getElementById('filter')
+const statusDot = document.getElementById('status-dot')
+let lineCount = 0
+let autoScroll = true
+
+function levelOf(line) {
+  if (line.includes('| DEBUG')) return 'DEBUG'
+  if (line.includes('| INFO')) return 'INFO'
+  if (line.includes('| WARN')) return 'WARN'
+  if (line.includes('| ERROR')) return 'ERROR'
+  return 'INFO'
+}
+
+function isVisible(el) {
+  const level = el.dataset.level
+  const text = el.dataset.text
+  const filterVal = filterInput.value.toLowerCase()
+  const levelOn = document.getElementById('chk-' + level.toLowerCase()).checked
+  return levelOn && (!filterVal || text.includes(filterVal))
+}
+
+function applyFilters() {
+  let visible = 0
+  for (const el of container.children) {
+    const show = isVisible(el)
+    el.classList.toggle('hidden', !show)
+    if (show) visible++
+  }
+  document.getElementById('count').textContent = `${visible} / ${lineCount} lines`
+}
+
+function addLine(text) {
+  const level = levelOf(text)
+  const el = document.createElement('div')
+  el.className = `log-line ${level}`
+  el.dataset.level = level
+  el.dataset.text = text.toLowerCase()
+  el.textContent = text
+  if (!isVisible(el)) el.classList.add('hidden')
+  container.appendChild(el)
+  lineCount++
+
+  // keep max 2000 lines
+  if (container.children.length > 2000) container.removeChild(container.firstChild)
+
+  if (autoScroll) container.scrollTop = container.scrollHeight
+  document.getElementById('count').textContent = `${lineCount} lines`
+}
+
+function clearLogs() {
+  container.innerHTML = ''
+  lineCount = 0
+  document.getElementById('count').textContent = '0 lines'
+}
+
+// auto-scroll: pause if user scrolls up
+container.addEventListener('scroll', () => {
+  autoScroll = container.scrollTop + container.clientHeight >= container.scrollHeight - 20
+})
+
+filterInput.addEventListener('input', applyFilters)
+document.getElementById('chk-debug').addEventListener('change', applyFilters)
+document.getElementById('chk-info').addEventListener('change', applyFilters)
+document.getElementById('chk-warn').addEventListener('change', applyFilters)
+document.getElementById('chk-error').addEventListener('change', applyFilters)
+
+// SSE
+const sse = new EventSource('/logs/stream')
+sse.addEventListener('log', e => addLine(e.data))
+sse.onopen = () => statusDot.className = 'on'
+sse.onerror = () => statusDot.className = ''
+</script>
+</body>
+</html>

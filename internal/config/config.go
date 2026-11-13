@@ -35,6 +35,7 @@ type logConf struct {
 	FileEnable          bool         `yaml:"fileEnable"`
 	PrintAsJSON         bool         `yaml:"printAsJson"`
 	LogLevel            LogLevelType `yaml:"logLevel"`
+	HighlightGPS        *bool        `yaml:"highlightGps"`
 	LogDirectory        string       `yaml:"logDirectory"`
 	LogFile             string       `yaml:"logFile"`
 	MaxSizeOfRolling    int          `yaml:"maxSizeOfRolling"`
@@ -45,13 +46,20 @@ type logConf struct {
 type serverConf struct {
 	Name   string      `yaml:"name"`
 	Port   *servPort   `yaml:"port"`
+	Media  *mediaConf  `yaml:"media"`
 	Banner *servBanner `yaml:"banner"`
 }
 
 type servPort struct {
-	TCPPort  string `yaml:"tcpPort"`
-	UDPPort  string `yaml:"udpPort"`
-	HTTPPort string `yaml:"httpPort"`
+	TCPPort   string `yaml:"tcpPort"`
+	UDPPort   string `yaml:"udpPort"`
+	HTTPPort  string `yaml:"httpPort"`
+	MediaPort string `yaml:"mediaPort"`
+}
+
+type mediaConf struct {
+	PublicIP string `yaml:"publicIp"`
+	RTPPort  int    `yaml:"rtpPort"`
 }
 
 type servBanner struct {
@@ -192,8 +200,13 @@ func (c *Config) ParseLogConf() *logger.Config {
 	case "FATAl":
 		logLevel = int8(zerolog.FatalLevel)
 	}
+	highlightGPS := true
+	if logCfg.HighlightGPS != nil {
+		highlightGPS = *logCfg.HighlightGPS
+	}
 	return &logger.Config{
 		ConsoleLoggingEnabled: logCfg.ConsoleEnable,
+		HighlightGPS:          highlightGPS,
 		EncodeLogsAsJSON:      logCfg.PrintAsJSON,
 		FileLoggingEnabled:    logCfg.FileEnable,
 		LogLevel:              logLevel,
@@ -203,4 +216,18 @@ func (c *Config) ParseLogConf() *logger.Config {
 		MaxBackups:            logCfg.MaxBackupsOfRolling,
 		MaxAge:                logCfg.MaxAgeOfRolling,
 	}
+}
+
+func (c *Config) GetMediaPort() string {
+	if c.Server != nil && c.Server.Port != nil && c.Server.Port.MediaPort != "" {
+		return c.Server.Port.MediaPort
+	}
+	return "1078"
+}
+
+func (c *Config) GetPublicIP() string {
+	if c.Server != nil && c.Server.Media != nil && c.Server.Media.PublicIP != "" {
+		return c.Server.Media.PublicIP
+	}
+	return "172.237.81.165"
 }

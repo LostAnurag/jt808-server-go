@@ -48,7 +48,7 @@ func NewJT808PacketCodec() *JT808PacketCodec {
 func (pc *JT808PacketCodec) Decode(payload []byte) (*model.PacketData, error) {
 	pkt := pc.unescape(payload)
 
-	verifyCode := payload[len(payload)-1]
+	verifyCode := pkt[len(pkt)-1]
 	pkt, err := pc.verify(pkt)
 	if err != nil {
 		return nil, err

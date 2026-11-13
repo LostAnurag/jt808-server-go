@@ -67,17 +67,25 @@ func checkDeviceKeepalive(t *KeepaliveTimer, devicePhone string) {
 	cache := storage.GetDeviceCache()
 	gisCache := storage.GetGeoCache()
 	d, err := cache.GetDeviceByPhone(devicePhone)
-	if errors.Is(err, storage.ErrDeviceNotFound) {
+	if errors.Is(err, storage.ErrDeviceNotFound) || d == nil {
 		log.Debug().Str("device", devicePhone).Msg("Fail to find device cache")
 		t.Cancel(devicePhone)
+		return
 	}
+	if err != nil {
+		log.Error().Err(err).Str("device", devicePhone).Msg("Fail to find device cache")
+		return
+	}
+
 	if d.ShouleTurnOffline() {
 		// 保活失效
 		d.Status = model.DeviceStatusOffline
 		cache.CacheDevice(d)
 		log.Debug().Str("device", devicePhone).Msg("Turn offline for device keepalive expired")
 	} else if d.ShouldClear() {
-		d.Conn.Close()
+		if d.Conn != nil {
+			d.Conn.Close()
+		}
 		cache.DelDeviceByPhone(devicePhone)
 		gisCache.DelGeoByPhone(devicePhone)
 		log.Debug().Str("device", d.Phone).Msg("Clear cache and close connection after device being offline for a long time")

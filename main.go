@@ -9,6 +9,7 @@ import (
 
 	"github.com/fakeyanss/jt808-server-go/internal/api"
 	"github.com/fakeyanss/jt808-server-go/internal/config"
+	"github.com/fakeyanss/jt808-server-go/internal/media"
 	"github.com/fakeyanss/jt808-server-go/internal/server"
 	"github.com/fakeyanss/jt808-server-go/pkg/logger"
 	"github.com/fakeyanss/jt808-server-go/pkg/routines"
@@ -45,6 +46,12 @@ func main() {
 		os.Exit(1)
 	}
 	routines.GoSafe(func() { serv.Start() })
+
+	mediaServ := media.NewJT1078Server(cfg.GetMediaPort(), cfg.GetMediaPort())
+	err = mediaServ.Start()
+	if err != nil {
+		log.Warn().Err(err).Msg("JT1078 Media Server could not start")
+	}
 
 	routines.GoSafe(func() { api.Run(serv, cfg) })
 
