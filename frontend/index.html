@@ -349,7 +349,7 @@
         </div>
         <div style="display:flex;gap:6px;margin-bottom:4px;align-items:center;">
           <span style="color:#94a3b8;font-size:10px;">Device ID:</span>
-          <span style="color:#38bdf8;font-size:11px;font-weight:700;letter-spacing:0.05em;">77077047531</span>
+          <input type="text" id="cfg-device-id" value="077077047531" style="flex:1;background:#1e293b;border:1px solid #334155;color:#38bdf8;padding:3px 6px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.05em;outline:none;" />
         </div>
         <div style="font-size:10px;color:#64748b;margin-bottom:6px;">
           Target IP:Port sent in 0x9101 for MDVR 4G connection.
@@ -908,7 +908,8 @@ function switchVideoView(mode) {
 }
 
 async function startCurrentStream() {
-  if (!activePhone) return
+  const streamPhone = (document.getElementById('cfg-device-id').value.trim()) || activePhone
+  if (!streamPhone) return
   if (currentViewMode === 'quad') {
     return startQuadStreams()
   }
@@ -927,7 +928,7 @@ async function startCurrentStream() {
   `
 
   try {
-    const res = await fetch(`${API}/device/${activePhone}/video/start`, {
+    const res = await fetch(`${API}/device/${streamPhone}/video/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -981,7 +982,8 @@ async function startCurrentStream() {
 }
 
 async function startQuadStreams() {
-  if (!activePhone) return
+  const streamPhone = (document.getElementById('cfg-device-id').value.trim()) || activePhone
+  if (!streamPhone) return
   const sIp = document.getElementById('cfg-media-ip').value.trim()
   const sPort = parseInt(document.getElementById('cfg-media-port').value.trim()) || 1078
   const streamType = parseInt(document.getElementById('cfg-stream-type').value) || 1
@@ -996,7 +998,7 @@ async function startQuadStreams() {
 
   for (let ch = 1; ch <= 4; ch++) {
     try {
-      const res = await fetch(`${API}/device/${activePhone}/video/start`, {
+      const res = await fetch(`${API}/device/${streamPhone}/video/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

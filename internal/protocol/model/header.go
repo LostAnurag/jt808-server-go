@@ -1,6 +1,8 @@
 package model
 
 import (
+	"strings"
+
 	"github.com/pkg/errors"
 
 	"github.com/fakeyanss/jt808-server-go/internal/codec/hex"
@@ -41,9 +43,9 @@ func (h *MsgHeader) Decode(pkt []byte) error {
 
 	// 2013版本，phoneNumber [5,11)位 长度6位；2019版本，phoneNumber [5,15)位 长度10位。
 	if h.Attr.VersionDesc == Version2019 {
-		h.PhoneNumber = hex.ReadBCD(pkt, &idx, 10)
+		h.PhoneNumber = strings.TrimLeft(hex.ReadBCD(pkt, &idx, 10), "0")
 	} else if h.Attr.VersionDesc == Version2013 {
-		h.PhoneNumber = hex.ReadBCD(pkt, &idx, 6)
+		h.PhoneNumber = strings.TrimLeft(hex.ReadBCD(pkt, &idx, 6), "0")
 	} else {
 		return ErrDecodeHeader
 	}
