@@ -55,14 +55,20 @@ func NewDevice(in *Msg0100, session *Session) *Device {
 	}
 }
 
+// ShouleTurnOffline checks if device should go offline due to keepalive expiry.
 func (d *Device) ShouleTurnOffline() bool {
-	now := time.Now().UnixMilli()
-	return d.Status != DeviceStatusOffline && now > d.Keepalive.Milliseconds()+d.LastestComTime.UnixMilli()
+	if d.LastestComTime.IsZero() {
+		return false
+	}
+	return d.Status != DeviceStatusOffline && time.Since(d.LastestComTime) > d.Keepalive
 }
 
+// ShouldClear checks if offline device cache should be evicted (3x keepalive).
 func (d *Device) ShouldClear() bool {
-	now := time.Now().UnixMilli()
-	return d.Status == DeviceStatusOffline && now > d.Keepalive.Milliseconds()+d.LastestComTime.UnixMilli()
+	if d.LastestComTime.IsZero() {
+		return false
+	}
+	return d.Status == DeviceStatusOffline && time.Since(d.LastestComTime) > 3*d.Keepalive
 }
 
 // 终端设备地理位置状态相关信息
@@ -238,8 +244,8 @@ func (g *GeoMeta) Encode() uint32 {
 	var bitNum uint32
 	bitNum += uint32(g.ACCStatus)
 	bitNum += uint32(g.LocationStatus) << 1
-	bitNum += uint32(g.LongitudeType) << 2
-	bitNum += uint32(g.LatitudeType) << 3
+	bitNum += uint32(g.LatitudeType) << 2
+	bitNum += uint32(g.LongitudeType) << 3
 	bitNum += uint32(g.OperatingStatus) << 4
 	bitNum += uint32(g.GeoEncryptionStatus) << 5
 	bitNum += uint32(g.LoadStatus) << 8

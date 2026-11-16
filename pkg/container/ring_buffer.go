@@ -51,10 +51,12 @@ func (r *RingBuffer) Read() any {
 
 // Returns the latest element in the RingBuffer
 func (r *RingBuffer) Latest() any {
-	if r.Writer == 0 {
+	w := atomic.LoadInt32(&r.Writer)
+	if w == 0 && r.Container[r.Size-1] == nil {
 		return nil
 	}
-	return r.Container[(atomic.LoadInt32(&r.Writer)-1)%r.Size]
+	idx := (w - 1 + r.Size) % r.Size
+	return r.Container[idx]
 }
 
 // Returns the oldest element in RingBuffer

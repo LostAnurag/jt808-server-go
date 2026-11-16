@@ -43,12 +43,8 @@ func (s *Session) GetTransProto() TransportProtocol {
 }
 
 func (s *Session) GetNextSerialNum() uint16 {
-	next := atomic.AddUint32(&s.serialNumber, 1)
-	if next <= math.MaxUint16 {
-		return uint16(next)
-	}
-	atomic.StoreUint32(&s.serialNumber, 0)
-	return uint16(s.serialNumber)
+	next := atomic.AddUint32(&s.serialNumber, 1) % math.MaxUint16
+	return uint16(next)
 }
 
 // 定义Packet Data结构
