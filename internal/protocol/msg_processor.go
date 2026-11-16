@@ -258,6 +258,7 @@ func processSegmentPacket(_ context.Context, pkt *model.PacketData) (*model.Proc
 // 收到心跳，应刷新终端缓存有效期
 func processMsg0002(_ context.Context, data *model.ProcessData) error {
 	cache := storage.GetDeviceCache()
+	data.Incoming.GetHeader().PhoneNumber = normalizePhone(data.Incoming.GetHeader().PhoneNumber)
 	device, err := cache.GetDeviceByPhone(data.Incoming.GetHeader().PhoneNumber)
 
 	// 缓存不存在，说明设备不合法，需要返回错误，让服务层处理关闭
@@ -288,9 +289,14 @@ func processMsg0003(_ context.Context, data *model.ProcessData) error {
 	return nil
 }
 
+func normalizePhone(phone string) string {
+	return strings.TrimLeft(phone, "0")
+}
+
 // 收到注册，如果已注册则更新会话信息，始终返回成功及鉴权码
 func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 	in := data.Incoming.(*model.Msg0100)
+	in.Header.PhoneNumber = normalizePhone(in.Header.PhoneNumber)
 
 	cache := storage.GetDeviceCache()
 	out := data.Outgoing.(*model.Msg8100)
@@ -298,7 +304,7 @@ func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 	session := ctx.Value(model.SessionCtxKey{}).(*model.Session)
 	device := model.NewDevice(in, session)
 	out.Result = model.ResSuccess
-	out.AuthCode = genAuthCode(device) // 设置鉴权码
+	out.AuthCode = genAuthCode(device)
 
 	cache.CacheDevice(device)
 
@@ -310,6 +316,7 @@ func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 // 收到鉴权，应校验鉴权token
 func processMsg0102(_ context.Context, data *model.ProcessData) error {
 	in := data.Incoming.(*model.Msg0102)
+	in.Header.PhoneNumber = normalizePhone(in.Header.PhoneNumber)
 
 	cache := storage.GetDeviceCache()
 	device, err := cache.GetDeviceByPhone(in.Header.PhoneNumber)
@@ -371,6 +378,7 @@ func processMsg0900(_ context.Context, data *model.ProcessData) error {
 
 // 处理单条位置信息汇报
 func processSingleMsg0200(ctx context.Context, in *model.Msg0200, rawJT808 []byte) error {
+	in.Header.PhoneNumber = normalizePhone(in.Header.PhoneNumber)
 	cache := storage.GetDeviceCache()
 	device, err := cache.GetDeviceByPhone(in.Header.PhoneNumber)
 	if errors.Is(err, storage.ErrDeviceNotFound) {
