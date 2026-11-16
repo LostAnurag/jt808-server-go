@@ -318,11 +318,12 @@ func (s *JT1078Server) Close() error {
 func (s *JT1078Server) handleUDP() {
 	buf := make([]byte, 65536)
 	for {
-		n, _, err := s.udpConn.ReadFromUDP(buf)
+		n, addr, err := s.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			return
 		}
 		if n >= 30 {
+			log.Debug().Str("remote", addr.String()).Int("len", n).Msg("JT1078 UDP packet received")
 			s.processSinglePacket(buf[:n])
 		}
 	}
@@ -459,6 +460,34 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 	flagByte := packet[15]
 	dataType := (flagByte >> 4) & 0x0F
 	subPacket := flagByte & 0x0F
+
+	dataTypeDesc := map[byte]string{
+		0: "I-frame", 1: "P-frame", 2: "B-frame",
+		3: "Audio", 4: "Transparent",
+	}
+	subPacketDesc := map[byte]string{
+		0: "Atomic", 1: "First", 2: "Last", 3: "Middle",
+	}
+
+	var ts uint64
+	if len(packet) >= 24 {
+		for i := 16; i < 24; i++ {
+			ts = ts<<8 | uint64(packet[i])
+		}
+	}
+	serial := uint16(packet[6])<<8 | uint16(packet[7])
+	bodyLen := len(packet) - headerLen
+
+	log.Debug().
+		Str("phone", cleanPhone).
+		Uint8("channel", channel).
+		Str("dataType", dataTypeDesc[dataType]).
+		Str("subPacket", subPacketDesc[subPacket]).
+		Uint16("serial", serial).
+		Uint64("timestamp", ts).
+		Int("bodyLen", bodyLen).
+		Hex("header", packet[:headerLen]).
+		Msg("JT1078 packet received")
 
 	payload := packet[headerLen:]
 
