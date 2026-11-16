@@ -274,10 +274,6 @@
           Make sure your dashcam or simulator is sending JT808 data to port 8080.
         </p>
       </div>
-      <div style="margin-top:10px;display:flex;gap:6px;align-items:center;">
-        <input id="manual-phone" type="text" placeholder="Enter device phone/ID manually" style="flex:1;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:12px;outline:none;" />
-        <button onclick="manualSelect()" style="padding:6px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Track</button>
-      </div>
     </div>
 
     <!-- Live Cameras Panel (2CH / 4CH) -->
@@ -348,8 +344,12 @@
       <div id="media-settings-panel" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px;margin-bottom:8px;font-size:11px;">
         <div style="font-weight:600;color:#94a3b8;margin-bottom:4px;">Stream Settings (JT1078 RTP Ingest):</div>
         <div style="display:flex;gap:6px;margin-bottom:4px;">
-          <input type="text" id="cfg-media-ip" value="172.237.81.165" placeholder="172.237.81.165" style="flex:2;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:4px 6px;border-radius:4px;font-size:10px;" />
+          <input type="text" id="cfg-media-ip" value="13.237.177.42" placeholder="13.237.177.42" style="flex:2;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:4px 6px;border-radius:4px;font-size:10px;" />
           <input type="number" id="cfg-media-port" placeholder="Port" value="1078" style="flex:1;background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:4px 6px;border-radius:4px;font-size:10px;" />
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:4px;align-items:center;">
+          <span style="color:#94a3b8;font-size:10px;">Device ID:</span>
+          <span style="color:#38bdf8;font-size:11px;font-weight:700;letter-spacing:0.05em;">77077047531</span>
         </div>
         <div style="font-size:10px;color:#64748b;margin-bottom:6px;">
           Target IP:Port sent in 0x9101 for MDVR 4G connection.
@@ -486,6 +486,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const API = ''
+const DEFAULT_PHONE = '77077047531'
 
 // --- Google Maps Layers ---
 const googleRoadmap = L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
@@ -569,11 +570,11 @@ async function loadDevices() {
 
     if (list.length > 0) {
       const current = list[0]
-      const input = document.getElementById('manual-phone')
-      if (input && !input.value) input.value = current.phone
       if (activePhone !== current.phone) {
         selectDevice(current.phone)
       }
+    } else if (!activePhone) {
+      selectDevice(DEFAULT_PHONE)
     } else {
       if (activePhone) {
         setConnected(false, 'Device disconnected')
@@ -1206,20 +1207,6 @@ function destroyFlvPlayers() {
 function toggleMediaSettings() {
   const p = document.getElementById('media-settings-panel')
   if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none'
-}
-
-function manualSelect() {
-  const input = document.getElementById('manual-phone')
-  const phone = input.value.trim().replace(/^0+/, '') // strip leading zeros
-  if (!phone) return
-  selectDevice(phone)
-  document.getElementById('d-phone').textContent = phone
-  // show panels
-  document.getElementById('detail-panel').style.display = 'block'
-  const vp = document.getElementById('video-panel')
-  if (vp) vp.style.display = 'block'
-  const ap = document.getElementById('ai-panel')
-  if (ap) ap.style.display = 'block'
 }
 
 // Initial load & poll for device state
