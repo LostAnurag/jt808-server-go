@@ -274,6 +274,10 @@
           Make sure your dashcam or simulator is sending JT808 data to port 8080.
         </p>
       </div>
+      <div style="margin-top:10px;display:flex;gap:6px;align-items:center;">
+        <input id="manual-phone" type="text" placeholder="Enter device phone/ID manually" style="flex:1;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:12px;outline:none;" />
+        <button onclick="manualSelect()" style="padding:6px 12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Track</button>
+      </div>
     </div>
 
     <!-- Live Cameras Panel (2CH / 4CH) -->
@@ -564,8 +568,9 @@ async function loadDevices() {
     renderDevice(list)
 
     if (list.length > 0) {
-      // Automatically select the connected single device
       const current = list[0]
+      const input = document.getElementById('manual-phone')
+      if (input && !input.value) input.value = current.phone
       if (activePhone !== current.phone) {
         selectDevice(current.phone)
       }
@@ -1201,6 +1206,20 @@ function destroyFlvPlayers() {
 function toggleMediaSettings() {
   const p = document.getElementById('media-settings-panel')
   if (p) p.style.display = p.style.display === 'none' ? 'block' : 'none'
+}
+
+function manualSelect() {
+  const input = document.getElementById('manual-phone')
+  const phone = input.value.trim().replace(/^0+/, '') // strip leading zeros
+  if (!phone) return
+  selectDevice(phone)
+  document.getElementById('d-phone').textContent = phone
+  // show panels
+  document.getElementById('detail-panel').style.display = 'block'
+  const vp = document.getElementById('video-panel')
+  if (vp) vp.style.display = 'block'
+  const ap = document.getElementById('ai-panel')
+  if (ap) ap.style.display = 'block'
 }
 
 // Initial load & poll for device state
