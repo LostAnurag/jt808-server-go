@@ -140,17 +140,28 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 		device, err := cache.GetDeviceByPhone(phone)
 		if err != nil {
 			// Device not found by given phone - try getting active session directly
-			// (handles phone normalization mismatches like 077077047531 vs 377077047531)
+			// (handles phone normalization mismatches like 077077047531 vs 77077047531)
 			session, serr := storage.GetSessionByPhone(phone)
 			if serr != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"err": fmt.Sprintf("Device %s not found and no active session", phone)})
 				return
 			}
-			// Build a minimal device from session for sending the command
+			// Try to find the real device via the session's bound phone to preserve VersionDesc
+			var versionDesc model.VersionType = model.Version2019
+			var protocolVersion uint8 = 1
+			for _, d := range cache.ListDevice() {
+				if d.SessionID == session.ID {
+					versionDesc = d.VersionDesc
+					protocolVersion = d.ProtocolVersion
+					break
+				}
+			}
 			device = &model.Device{
-				Phone:     phone,
-				SessionID: session.ID,
-				Conn:      session.Conn,
+				Phone:           phone,
+				SessionID:       session.ID,
+				Conn:            session.Conn,
+				VersionDesc:     versionDesc,
+				ProtocolVersion: protocolVersion,
 			}
 			err = nil
 		}
