@@ -145,7 +145,8 @@ func (h *MediaHub) Broadcast(streamKey string, tag []byte, isKeyframe bool, sps,
 	}
 }
 
-// HasActiveStream returns true if the stream has received packets within the last 15 seconds.
+// HasActiveStream returns true only if the stream has received a keyframe within the last 15 seconds.
+// P-frame-only streams are not considered active for retry purposes.
 func (h *MediaHub) HasActiveStream(streamKey string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -157,7 +158,7 @@ func (h *MediaHub) HasActiveStream(streamKey string) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	return time.Since(b.lastPacketAt) < 15*time.Second
+	return len(b.lastKeyframeTag) > 0 && time.Since(b.lastPacketAt) < 15*time.Second
 }
 
 // FrameAssembler buffers and reassembles fragmented JT1078 RTP sub-packets.
@@ -613,7 +614,7 @@ func HandleHTTPFLV(c *gin.Context) {
 	}
 
 	clientGone := c.Request.Context().Done()
-	timeout := time.NewTimer(15 * time.Second)
+	timeout := time.NewTimer(30 * time.Second)
 	defer timeout.Stop()
 
 	for {

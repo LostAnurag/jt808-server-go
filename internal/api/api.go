@@ -199,22 +199,38 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 			Msg("Sent 0x9101 Live AV Transmission Request to device")
 
 		// If MDVR started mid-GOP it will only send P-frames until the next I-frame.
-		// Resend 0x9101 after 3s to force the MDVR to restart the stream from an I-frame.
+		// Force restart by sending 9102 stop then 9101 start to get a fresh I-frame.
 		go func() {
-			time.Sleep(3 * time.Second)
+			time.Sleep(5 * time.Second)
 			streamKey := media.StreamKey(phone, req.ChannelNumber)
 			if media.GetMediaHub().HasActiveStream(streamKey) {
 				return // I-frame already arrived, stream is healthy
 			}
 			d, err := cache.GetDeviceByPhone(phone)
 			if err != nil {
-				return
+				d = &model.Device{Phone: phone}
 			}
 			s, err := getDeviceActiveSession(d, phone)
 			if err != nil {
 				return
 			}
-			retryHeader := model.GenMsgHeader(d, model.MsgID9101, s.GetNextSerialNum())
+			// Send 9102 stop first
+			stopHeader := model.GenMsgHeader(d, model.MsgID9102, s.GetNextSerialNum())
+			stopMsg := model.Msg9102{
+				Header:        stopHeader,
+				ChannelNumber: req.ChannelNumber,
+				ControlCmd:    0,
+				CloseType:     0,
+			}
+			serv.Send(s.ID, &stopMsg)
+			time.Sleep(1 * time.Second)
+			// Re-fetch session after stop
+			s2, err := getDeviceActiveSession(d, phone)
+			if err != nil {
+				return
+			}
+			// Send 9101 start again
+			retryHeader := model.GenMsgHeader(d, model.MsgID9101, s2.GetNextSerialNum())
 			retryMsg := model.Msg9101{
 				Header:        retryHeader,
 				ServerIP:      req.ServerIP,
@@ -224,8 +240,8 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 				DataType:      req.DataType,
 				StreamType:    req.StreamType,
 			}
-			serv.Send(s.ID, &retryMsg)
-			log.Info().Str("phone", phone).Uint8("channel", req.ChannelNumber).Msg("Resent 0x9101 to force I-frame from MDVR")
+			serv.Send(s2.ID, &retryMsg)
+			log.Info().Str("phone", phone).Uint8("channel", req.ChannelNumber).Msg("Force restarted stream via 9102+9101 to get I-frame")
 		}()
 
 		c.JSON(http.StatusOK, gin.H{
