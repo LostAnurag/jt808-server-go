@@ -984,7 +984,18 @@ async function startCurrentStream() {
     document.getElementById('v-rec-badge').className = 'rec-badge live'
     document.getElementById('v-rec-badge').textContent = '● LIVE'
 
-    playStreamUrl(data.streamUrl, document.getElementById('live-player'), placeholder)
+    var liveEl = document.getElementById('live-player')
+    playStreamUrl(data.streamUrl, liveEl, placeholder)
+    var pollCount = 0
+    var pollTimer = setInterval(function() {
+      pollCount++
+      if (!isStreaming || pollCount > 60) { clearInterval(pollTimer); return }
+      if (liveEl.videoWidth > 0 && liveEl.readyState >= 2) {
+        clearInterval(pollTimer)
+        placeholder.style.display = 'none'
+        liveEl.style.display = 'block'
+      }
+    }, 500)
   } catch (err) {
     console.warn('Start stream error:', err)
     placeholder.style.display = 'flex'
@@ -1088,17 +1099,16 @@ function playStreamUrl(url, videoEl, placeholderEl) {
       })
 
       flvPlayer.on(flvjs.Events.ERROR, (errType, errDetail) => {
-        console.warn('FLV stream info:', errType, errDetail)
-        if (placeholderEl && (!videoEl.videoWidth || videoEl.videoWidth === 0)) {
-          placeholderEl.style.display = 'flex'
-          const sIp = document.getElementById('cfg-media-ip') ? document.getElementById('cfg-media-ip').value : '172.237.81.165'
-          placeholderEl.innerHTML = `
-            <div style="font-size:22px;animation:alert-pulse 1.5s infinite;">⏳</div>
-            <div><b>Awaiting Stream Packets...</b></div>
-            <div style="font-size:10px;color:#94a3b8;">Sent 0x9101 to MDVR (CH${currentChannel})</div>
-            <div style="font-size:9px;color:#64748b;margin-top:2px;">Target: ${sIp}:1078</div>
-          `
-        }
+        console.warn('FLV error, retrying:', errType, errDetail)
+        if (!isStreaming || (videoEl && videoEl.videoWidth > 0)) return
+        try { flvPlayer.unload() } catch(e) {}
+        setTimeout(function() {
+          if (!isStreaming) return
+          try { flvPlayer.load(); flvPlayer.play().catch(function(){}) } catch(e) {
+            destroyFlvPlayers()
+            playStreamUrl(url, videoEl, placeholderEl)
+          }
+        }, 2000)
       })
     } catch (e) {
       console.warn('FLV Init:', e)
