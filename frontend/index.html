@@ -242,12 +242,10 @@
       border: 1px solid #334155;
       transition: all 0.2s;
     }
-    .vbtn.start { background: #15803d; color: #bbf7d0; border-color: #16a34a; }
-    .vbtn.start:hover { background: #16a34a; }
-    .vbtn.stop { background: #991b1b; color: #fecaca; border-color: #dc2626; }
-    .vbtn.stop:hover { background: #b91c1c; }
     .vbtn.secondary { flex: 0 0 32px; background: #0f172a; color: #94a3b8; }
     .vbtn.secondary:hover { background: #1e293b; color: #f1f5f9; }
+    .vbtn.audio-on { background: #0f172a; color: #4ade80; border-color: #16a34a; }
+    .vbtn.audio-off { background: #0f172a; color: #f87171; border-color: #dc2626; }
   </style>
 </head>
 <body>
@@ -301,9 +299,9 @@
           </div>
           <video id="live-player" autoplay muted playsinline></video>
           <div class="video-placeholder" id="v-placeholder">
-            <div style="font-size:24px;">📹</div>
-            <div><b>Camera Ready</b></div>
-            <div style="font-size:10px;color:#64748b;">Click "Start Stream" to wake up MDVR live video</div>
+            <div style="font-size:24px;animation:alert-pulse 1s infinite;">⏳</div>
+            <div><b>Connecting to camera...</b></div>
+            <div style="font-size:10px;color:#64748b;">Waiting for device stream</div>
           </div>
         </div>
       </div>
@@ -334,9 +332,7 @@
 
       <!-- Streaming Controls -->
       <div class="video-ctrls">
-        <button class="vbtn start" id="btn-start-stream" onclick="startCurrentStream()">▶️ Start Stream</button>
-        <button class="vbtn stop" id="btn-stop-stream" onclick="stopCurrentStream()" style="display:none;">⏹️ Stop Stream</button>
-        <button class="vbtn" id="btn-test-stream" onclick="toggleTestStream()" style="background:#334155;color:#38bdf8;" title="Preview video player with test stream">🧪 Test Stream</button>
+        <button class="vbtn audio-off" id="btn-audio-toggle" onclick="toggleAudio()" title="Toggle Audio">🔇 Audio Off</button>
         <button class="vbtn secondary" onclick="toggleMediaSettings()" title="Stream Settings">⚙️</button>
       </div>
 
@@ -622,6 +618,9 @@ function selectDevice(phone) {
   if (videoPanel) videoPanel.style.display = 'block'
   document.getElementById('d-phone').textContent = phone
 
+  // Auto-start stream for default channel
+  setTimeout(() => startCurrentStream(), 800)
+
   // Fetch device details
   fetch(`${API}/device/${phone}/geo`).then(r => r.json()).then(d => {
     document.getElementById('d-plate').textContent = d.Plate || '—'
@@ -861,6 +860,30 @@ let currentChannel = 1
 let isStreaming = false
 let currentViewMode = 'single'
 let activeFlvPlayers = []
+let audioEnabled = false
+
+function toggleAudio() {
+  audioEnabled = !audioEnabled
+  const btn = document.getElementById('btn-audio-toggle')
+  if (audioEnabled) {
+    btn.className = 'vbtn audio-on'
+    btn.textContent = '🔊 Audio On'
+  } else {
+    btn.className = 'vbtn audio-off'
+    btn.textContent = '🔇 Audio Off'
+  }
+  for (let i = 1; i <= 4; i++) {
+    const v = document.getElementById(`quad-player-${i}`)
+    if (v) v.muted = !audioEnabled
+  }
+  const lp = document.getElementById('live-player')
+  if (lp) lp.muted = !audioEnabled
+  if (isStreaming) {
+    destroyFlvPlayers()
+    if (currentViewMode === 'quad') startQuadStreams()
+    else startCurrentStream()
+  }
+}
 
 const channelNames = {
   1: 'CH1: 1080P Front (ADAS)',
@@ -956,8 +979,6 @@ async function startCurrentStream() {
     const data = await res.json()
 
     isStreaming = true
-    document.getElementById('btn-start-stream').style.display = 'none'
-    document.getElementById('btn-stop-stream').style.display = 'flex'
     document.getElementById('video-status-badge').className = 'ai-badge alert'
     document.getElementById('video-status-badge').textContent = 'LIVE'
     document.getElementById('v-rec-badge').className = 'rec-badge live'
@@ -971,11 +992,8 @@ async function startCurrentStream() {
       <div style="font-size:24px;">🔌</div>
       <div style="color:#f87171;font-weight:700;font-size:12px;">Device Offline / Session Closed</div>
       <div style="font-size:10px;color:#94a3b8;margin:4px 0;max-width:260px;text-align:center;">
-        Dashcam connection dropped. Reconnect MDVR to port 8080 (or restart the SSH tunnel).
+        Dashcam connection dropped. Reconnect MDVR to port 8080.
       </div>
-      <button class="vbtn" onclick="toggleTestStream()" style="background:#0284c7;color:#fff;margin-top:6px;padding:4px 10px;font-size:10px;">
-        🧪 Preview With Test Stream
-      </button>
     `
     stopCurrentStream(false)
   }
@@ -991,8 +1009,6 @@ async function startQuadStreams() {
   destroyFlvPlayers()
 
   isStreaming = true
-  document.getElementById('btn-start-stream').style.display = 'none'
-  document.getElementById('btn-stop-stream').style.display = 'flex'
   document.getElementById('video-status-badge').className = 'ai-badge alert'
   document.getElementById('video-status-badge').textContent = '4CH LIVE'
 
@@ -1024,7 +1040,7 @@ function playStreamUrl(url, videoEl, placeholderEl) {
   const fullUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`
 
   if (videoEl) {
-    videoEl.muted = true
+    videoEl.muted = !audioEnabled
     videoEl.playsInline = true
 
     const markVideoPlaying = () => {
@@ -1033,7 +1049,7 @@ function playStreamUrl(url, videoEl, placeholderEl) {
       const sBadge = document.getElementById('video-status-badge')
       if (sBadge) {
         sBadge.className = 'ai-badge alert'
-        sBadge.textContent = isTestingStream ? 'TEST LIVE' : 'LIVE'
+        sBadge.textContent = 'LIVE'
       }
       const rBadge = document.getElementById('v-rec-badge')
       if (rBadge) {
@@ -1053,10 +1069,12 @@ function playStreamUrl(url, videoEl, placeholderEl) {
         type: 'flv',
         isLive: true,
         url: fullUrl,
-        hasAudio: false,
+        hasAudio: true,
         enableStashBuffer: false,
+        stashInitialSize: 128,
         lazyLoad: false,
-        autoCleanupSourceBuffer: true
+        autoCleanupSourceBuffer: true,
+        fixAudioTimestampGap: true
       })
       flvPlayer.attachMediaElement(videoEl)
       flvPlayer.load()
@@ -1092,56 +1110,9 @@ function playStreamUrl(url, videoEl, placeholderEl) {
 }
 
 let isTestingStream = false
-function toggleTestStream() {
-  const btn = document.getElementById('btn-test-stream')
-  if (!isTestingStream) {
-    isTestingStream = true
-    if (btn) {
-      btn.style.background = '#0284c7'
-      btn.textContent = '⏹️ Stop Test'
-    }
-    destroyFlvPlayers()
-
-    isStreaming = true
-    document.getElementById('btn-start-stream').style.display = 'none'
-    document.getElementById('btn-stop-stream').style.display = 'flex'
-    document.getElementById('video-status-badge').className = 'ai-badge alert'
-    document.getElementById('video-status-badge').textContent = 'TEST LIVE'
-
-    if (currentViewMode === 'quad') {
-      document.getElementById('single-video-wrap').style.display = 'none'
-      document.getElementById('quad-video-wrap').style.display = 'grid'
-      for (let ch = 1; ch <= 4; ch++) {
-        const vEl = document.getElementById(`quad-player-${ch}`)
-        const phEl = document.getElementById(`qp-ph-${ch}`)
-        playStreamUrl(`/live/test_${ch}.flv?test=true`, vEl, phEl)
-      }
-    } else {
-      document.getElementById('single-video-wrap').style.display = 'block'
-      document.getElementById('quad-video-wrap').style.display = 'none'
-      const vEl = document.getElementById('live-player')
-      const phEl = document.getElementById('v-placeholder')
-      playStreamUrl(`/live/test_${currentChannel}.flv?test=true`, vEl, phEl)
-    }
-  } else {
-    isTestingStream = false
-    if (btn) {
-      btn.style.background = '#334155'
-      btn.textContent = '🧪 Test Stream'
-    }
-    stopCurrentStream()
-  }
-}
 
 async function stopCurrentStream(resetPlaceholder = true) {
-  if (isTestingStream) {
-    isTestingStream = false
-    const btn = document.getElementById('btn-test-stream')
-    if (btn) {
-      btn.style.background = '#334155'
-      btn.textContent = '🧪 Test Stream'
-    }
-  }
+  isTestingStream = false
   if (!activePhone && !isStreaming) return
 
   if (currentViewMode === 'quad') {
@@ -1173,9 +1144,9 @@ async function stopCurrentStream(resetPlaceholder = true) {
   if (ph && resetPlaceholder) {
     ph.style.display = 'flex'
     ph.innerHTML = `
-      <div style="font-size:24px;">📹</div>
-      <div><b>Camera Ready</b></div>
-      <div style="font-size:10px;color:#64748b;">Click "Start Stream" to wake up MDVR live video</div>
+      <div style="font-size:24px;animation:alert-pulse 1s infinite;">⏳</div>
+      <div><b>Reconnecting to camera...</b></div>
+      <div style="font-size:10px;color:#64748b;">Waiting for device stream</div>
     `
   }
 
@@ -1186,8 +1157,6 @@ async function stopCurrentStream(resetPlaceholder = true) {
     if (qph) qph.style.display = 'flex'
   }
 
-  document.getElementById('btn-start-stream').style.display = 'flex'
-  document.getElementById('btn-stop-stream').style.display = 'none'
   document.getElementById('video-status-badge').className = 'ai-badge clear'
   document.getElementById('video-status-badge').textContent = 'STANDBY'
   document.getElementById('v-rec-badge').className = 'rec-badge'

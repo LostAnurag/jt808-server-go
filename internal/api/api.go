@@ -189,6 +189,36 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 			Uint16("tcpPort", req.TCPPort).
 			Msg("Sent 0x9101 Live AV Transmission Request to device")
 
+		// If MDVR started mid-GOP it will only send P-frames until the next I-frame.
+		// Resend 0x9101 after 3s to force the MDVR to restart the stream from an I-frame.
+		go func() {
+			time.Sleep(3 * time.Second)
+			streamKey := media.StreamKey(phone, req.ChannelNumber)
+			if media.GetMediaHub().HasActiveStream(streamKey) {
+				return // I-frame already arrived, stream is healthy
+			}
+			d, err := cache.GetDeviceByPhone(phone)
+			if err != nil {
+				return
+			}
+			s, err := getDeviceActiveSession(d, phone)
+			if err != nil {
+				return
+			}
+			retryHeader := model.GenMsgHeader(d, model.MsgID9101, s.GetNextSerialNum())
+			retryMsg := model.Msg9101{
+				Header:        retryHeader,
+				ServerIP:      req.ServerIP,
+				TCPPort:       req.TCPPort,
+				UDPPort:       req.UDPPort,
+				ChannelNumber: req.ChannelNumber,
+				DataType:      req.DataType,
+				StreamType:    req.StreamType,
+			}
+			serv.Send(s.ID, &retryMsg)
+			log.Info().Str("phone", phone).Uint8("channel", req.ChannelNumber).Msg("Resent 0x9101 to force I-frame from MDVR")
+		}()
+
 		c.JSON(http.StatusOK, gin.H{
 			"status":        "ok",
 			"msg":           "0x9101 live video stream request sent to device",

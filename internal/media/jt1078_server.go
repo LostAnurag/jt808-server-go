@@ -469,10 +469,11 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 		0: "Atomic", 1: "First", 2: "Last", 3: "Middle",
 	}
 
-	var ts uint64
+	// Read RTP timestamp (bytes 16..23, 8 bytes, 90kHz clock)
+	var rtpTs uint64
 	if len(packet) >= 24 {
 		for i := 16; i < 24; i++ {
-			ts = ts<<8 | uint64(packet[i])
+			rtpTs = rtpTs<<8 | uint64(packet[i])
 		}
 	}
 	serial := uint16(packet[6])<<8 | uint16(packet[7])
@@ -484,7 +485,7 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 		Str("dataType", dataTypeDesc[dataType]).
 		Str("subPacket", subPacketDesc[subPacket]).
 		Uint16("serial", serial).
-		Uint64("timestamp", ts).
+		Uint64("timestamp", rtpTs).
 		Int("bodyLen", bodyLen).
 		Hex("header", packet[:headerLen]).
 		Msg("JT1078 packet received")
@@ -527,8 +528,22 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 		}
 	}
 
-	dts := s.streamDTS[streamKey] + 40 // ~25 fps increment (40 ms)
-	s.streamDTS[streamKey] = dts
+	// Convert 90kHz RTP timestamp to milliseconds for FLV DTS.
+	// Use base timestamp anchoring so DTS starts near 0 and doesn't overflow uint32.
+	baseKey := streamKey + "_base"
+	base, hasBase := s.streamDTS[baseKey]
+	var dts uint32
+	rtpMs := uint32(rtpTs / 90) // 90kHz -> ms
+	if !hasBase || base == 0 {
+		s.streamDTS[baseKey] = rtpMs
+		dts = 0
+	} else {
+		if rtpMs >= base {
+			dts = rtpMs - base
+		} else {
+			dts = 0
+		}
+	}
 	s.dtsMu.Unlock()
 
 	flvPayload := FormatNALUsForFLV(nalus)
