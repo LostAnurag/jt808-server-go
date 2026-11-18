@@ -73,19 +73,25 @@ func bcd2NumberStr(bcd []byte) string {
 //	8 -> 1000
 //	9 -> 1001
 func numberStr2BCD(number string) []byte {
-	// Round up to nearest even length so hex decode works cleanly.
-	// JT808-2013 phone is 6 bytes (12 BCD digits); 2019 is 10 bytes (20 BCD digits).
-	// Pad with leading 'f' nibbles to reach the next even length >= len(number).
-	targetLen := len(number)
-	if targetLen%2 != 0 {
-		targetLen++
-	}
 	var rNumber = number
-	for len(rNumber) < targetLen {
+	for i := 0; i < 8-len(number); i++ {
 		rNumber = "f" + rNumber
 	}
 	bcd := Str2Byte(rNumber)
 	return bcd
+}
+
+// numberStr2BCDFixed encodes number into exactly n bytes, padding with leading 0xf nibbles.
+func numberStr2BCDFixed(number string, n int) []byte {
+	targetChars := n * 2
+	rNumber := number
+	for len(rNumber) < targetChars {
+		rNumber = "f" + rNumber
+	}
+	if len(rNumber) > targetChars {
+		rNumber = rNumber[len(rNumber)-targetChars:]
+	}
+	return Str2Byte(rNumber)
 }
 
 // 对应JT808类型BYTE
@@ -161,6 +167,11 @@ func ReadBCD(pkt []byte, idx *int, n int) string {
 // 对应JT808类型BCD[n]
 func WriteBCD(pkt []byte, bcd string) []byte {
 	return append(pkt, numberStr2BCD(bcd)...)
+}
+
+// WriteBCDFixed writes bcd string as exactly n bytes, padding with leading 0xf nibbles.
+func WriteBCDFixed(pkt []byte, bcd string, n int) []byte {
+	return append(pkt, numberStr2BCDFixed(bcd, n)...)
 }
 
 // 对应JT808类型String

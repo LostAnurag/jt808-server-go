@@ -72,7 +72,11 @@ func (h *MsgHeader) Encode() (pkt []byte, err error) {
 	if h.Attr.VersionDesc == Version2019 {
 		pkt = hex.WriteByte(pkt, h.ProtocolVersion) // 协议版本号
 	}
-	pkt = hex.WriteBCD(pkt, h.PhoneNumber)   // 手机号
+	if h.Attr.VersionDesc == Version2019 {
+		pkt = hex.WriteBCDFixed(pkt, h.PhoneNumber, 10) // 2019: 10 bytes
+	} else {
+		pkt = hex.WriteBCDFixed(pkt, h.PhoneNumber, 6) // 2013: 6 bytes
+	}
 	pkt = hex.WriteWord(pkt, h.SerialNumber) // 消息流水号
 	if h.Frag != nil {
 		pkt = append(pkt, h.Frag.Encode()...) // 消息包封装项
