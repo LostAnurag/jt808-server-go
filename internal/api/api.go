@@ -21,17 +21,19 @@ import (
 )
 
 func getDeviceActiveSession(device *model.Device, phone string) (*model.Session, error) {
-	if device != nil && device.SessionID != "" {
-		if s, err := storage.GetSession(device.SessionID); err == nil && s != nil {
-			return s, nil
-		}
-	}
+	// Always try by phone first (most reliable after reconnects)
 	if s, err := storage.GetSessionByPhone(phone); err == nil && s != nil {
 		if device != nil {
 			device.SessionID = s.ID
 			device.Conn = s.Conn
 		}
 		return s, nil
+	}
+	// Fallback to stored SessionID
+	if device != nil && device.SessionID != "" {
+		if s, err := storage.GetSession(device.SessionID); err == nil && s != nil {
+			return s, nil
+		}
 	}
 	return nil, storage.ErrSessionClosed
 }

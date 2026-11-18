@@ -67,11 +67,9 @@ func GetSessionByPhone(phone string) (*model.Session, error) {
 	if s, ok := c.cacheByPhone[phone]; ok {
 		return s, nil
 	}
-	// Fallback: 如果服务端只有1个活跃连接，直接返回该活跃会话
-	if len(c.cacheByID) == 1 {
-		for _, s := range c.cacheByID {
-			return s, nil
-		}
+	// Fallback: return any active session (works when only one device is connected)
+	for _, s := range c.cacheByID {
+		return s, nil
 	}
 	return nil, ErrSessionClosed
 }
