@@ -194,11 +194,10 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 	}
 
 	switch subPacket {
-	case 0: // Atomic packet
-		buf.data = buf.data[:0]
+	case 0: // Atomic packet - never touches buffer
 		return payload, isKeyframe
 
-	case 1: // First sub-packet of multi-packet frame
+	case 1: // First sub-packet - reset and start accumulating
 		buf.data = append(buf.data[:0], payload...)
 		buf.isKeyframe = isKeyframe
 		return nil, false
@@ -206,7 +205,7 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 	case 3: // Intermediate sub-packet
 		if len(buf.data) > 0 {
 			if len(buf.data)+len(payload) > 1024*1024 {
-				buf.data = buf.data[:0] // Drop on buffer overflow
+				buf.data = buf.data[:0]
 				return nil, false
 			}
 			buf.data = append(buf.data, payload...)
@@ -222,7 +221,7 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 			buf.data = buf.data[:0]
 			return res, kf
 		}
-		return nil, false // Discard orphaned tail packet if first packet was lost
+		return nil, false
 
 	default:
 		return payload, isKeyframe
@@ -238,10 +237,15 @@ type JT1078Server struct {
 	hub       *MediaHub
 	assembler *FrameAssembler
 
-	dtsMu  sync.Mutex
+	dtsMu     sync.Mutex
 	streamDTS map[string]uint32
 	cachedSPS map[string][]byte
 	cachedPPS map[string][]byte
+
+	// dedup: track last processed serial per streamKey to drop duplicate frames
+	// from multiple TCP connections sending the same stream
+	dedupMu   sync.Mutex
+	lastSerial map[string]uint16
 }
 
 // NewJT1078Server creates a new JT1078 media server instance.
@@ -253,13 +257,14 @@ func NewJT1078Server(tcpPort, udpPort string) *JT1078Server {
 		udpPort = "1078"
 	}
 	return &JT1078Server{
-		tcpPort:   tcpPort,
-		udpPort:   udpPort,
-		hub:       GetMediaHub(),
-		assembler: newFrameAssembler(),
-		streamDTS: make(map[string]uint32),
-		cachedSPS: make(map[string][]byte),
-		cachedPPS: make(map[string][]byte),
+		tcpPort:    tcpPort,
+		udpPort:    udpPort,
+		hub:        GetMediaHub(),
+		assembler:  newFrameAssembler(),
+		streamDTS:  make(map[string]uint32),
+		cachedSPS:  make(map[string][]byte),
+		cachedPPS:  make(map[string][]byte),
+		lastSerial: make(map[string]uint16),
 	}
 }
 
@@ -501,6 +506,20 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 	isKeyframe := (dataType == 0)
 	streamKey := StreamKey(cleanPhone, channel)
 
+	// Deduplicate: multiple TCP connections send the same stream.
+	// Only process the first connection that sends each serial number.
+	s.dedupMu.Lock()
+	last, seen := s.lastSerial[streamKey]
+	if seen && serial == last && subPacket != 1 {
+		// Same serial from a different connection - drop duplicate
+		s.dedupMu.Unlock()
+		return
+	}
+	if subPacket == 1 || subPacket == 0 {
+		s.lastSerial[streamKey] = serial
+	}
+	s.dedupMu.Unlock()
+
 	// Reassemble fragmented multi-packet frames
 	completePayload, isCompleteKF := s.assembler.Assemble(streamKey, subPacket, isKeyframe, payload)
 	if len(completePayload) == 0 {
@@ -530,11 +549,10 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 	}
 
 	// Convert 90kHz RTP timestamp to milliseconds for FLV DTS.
-	// Use base timestamp anchoring so DTS starts near 0 and doesn't overflow uint32.
 	baseKey := streamKey + "_base"
 	base, hasBase := s.streamDTS[baseKey]
 	var dts uint32
-	rtpMs := uint32(rtpTs / 90) // 90kHz -> ms
+	rtpMs := uint32(rtpTs / 90)
 	if !hasBase || base == 0 {
 		s.streamDTS[baseKey] = rtpMs
 		dts = 0
@@ -546,6 +564,12 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 		}
 	}
 	s.dtsMu.Unlock()
+
+	// For keyframes, only broadcast if we have SPS+PPS (needed for sequence header)
+	if isCompleteKF && (len(sps) == 0 || len(pps) == 0) {
+		log.Warn().Str("streamKey", streamKey).Msg("I-frame received but no SPS/PPS cached yet, dropping")
+		return
+	}
 
 	flvPayload := FormatNALUsForFLV(nalus)
 	tag := MakeVideoTag(isCompleteKF, false, dts, flvPayload)
