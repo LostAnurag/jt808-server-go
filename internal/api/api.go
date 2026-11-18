@@ -200,6 +200,20 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 			DataType:      req.DataType,
 			StreamType:    req.StreamType,
 		}
+
+		// Log the raw encoded bytes so we can verify the MDVR receives a valid frame
+		if rawBytes, encErr := msg.Encode(); encErr == nil {
+			log.Info().
+				Str("phone", phone).
+				Uint8("channel", req.ChannelNumber).
+				Str("serverIp", req.ServerIP).
+				Uint16("tcpPort", req.TCPPort).
+				Int("versionDesc", int(device.VersionDesc)).
+				Uint8("versionSign", header.Attr.VersionSign).
+				Str("raw9101hex", fmt.Sprintf("%X", rawBytes)).
+				Msg("Sending 0x9101 to device")
+		}
+
 		serv.Send(session.ID, &msg)
 
 		log.Info().
@@ -309,7 +323,50 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 		})
 	})
 
-	router.Static("/ui", "./frontend")
+	router.GET("/debug/stream/:phone", func(c *gin.Context) {
+		phone := c.Param("phone")
+		device, derr := cache.GetDeviceByPhone(phone)
+		session, serr := storage.GetSessionByPhone(phone)
+
+		info := gin.H{
+			"phone_requested": phone,
+			"device_found":    derr == nil,
+			"session_found":   serr == nil,
+		}
+		if derr == nil {
+			info["device_phone"] = device.Phone
+			info["device_version"] = device.VersionDesc
+			info["device_proto"] = device.ProtocolVersion
+			info["device_status"] = device.Status
+			info["device_session_id"] = device.SessionID
+			info["device_imei"] = device.IMEI
+		}
+		if serr == nil {
+			info["session_id"] = session.ID
+		}
+
+		// Encode a test 0x9101 and show the raw hex bytes that would be sent
+		if derr == nil && serr == nil {
+			testMsg := model.Msg9101{
+				Header:        model.GenMsgHeader(device, model.MsgID9101, 1),
+				ServerIP:      cfg.GetPublicIP(),
+				TCPPort:       1078,
+				UDPPort:       1078,
+				ChannelNumber: 1,
+				DataType:      1,
+				StreamType:    1,
+			}
+			if raw, err := testMsg.Encode(); err == nil {
+				info["msg9101_hex"] = fmt.Sprintf("%X", raw)
+				info["msg9101_server_ip"] = cfg.GetPublicIP()
+				info["msg9101_header_version"] = testMsg.Header.Attr.VersionDesc
+				info["msg9101_header_version_sign"] = testMsg.Header.Attr.VersionSign
+				info["msg9101_phone_in_header"] = testMsg.Header.PhoneNumber
+			}
+		}
+		c.JSON(http.StatusOK, info)
+	})
+
 
 	router.GET("/logs/stream", func(c *gin.Context) {
 		logFile := cfg.Log.LogDirectory + cfg.Log.LogFile
