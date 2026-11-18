@@ -139,8 +139,20 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 
 		device, err := cache.GetDeviceByPhone(phone)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"err": fmt.Sprintf("Device %s not found in registry", phone)})
-			return
+			// Device not found by given phone - try getting active session directly
+			// (handles phone normalization mismatches like 077077047531 vs 377077047531)
+			session, serr := storage.GetSessionByPhone(phone)
+			if serr != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"err": fmt.Sprintf("Device %s not found and no active session", phone)})
+				return
+			}
+			// Build a minimal device from session for sending the command
+			device = &model.Device{
+				Phone:     phone,
+				SessionID: session.ID,
+				Conn:      session.Conn,
+			}
+			err = nil
 		}
 		session, err := getDeviceActiveSession(device, phone)
 		if err != nil {
@@ -154,13 +166,8 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 			req.ChannelNumber = 1
 		}
 		if req.ServerIP == "" {
-			hostParts := strings.Split(c.Request.Host, ":")
-			clientHost := hostParts[0]
-			if clientHost != "" && clientHost != "localhost" && clientHost != "127.0.0.1" && clientHost != "::1" {
-				req.ServerIP = clientHost
-			} else {
-				req.ServerIP = cfg.GetPublicIP()
-			}
+			// Always use configured public IP - MDVR needs a raw IP, not a domain name
+			req.ServerIP = cfg.GetPublicIP()
 		}
 		if req.TCPPort == 0 && req.UDPPort == 0 {
 			var p uint16 = 1078
