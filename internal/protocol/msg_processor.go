@@ -314,15 +314,43 @@ func processMsg0100(ctx context.Context, data *model.ProcessData) error {
 }
 
 // 收到鉴权，应校验鉴权token
-func processMsg0102(_ context.Context, data *model.ProcessData) error {
+func processMsg0102(ctx context.Context, data *model.ProcessData) error {
 	in := data.Incoming.(*model.Msg0102)
 	in.Header.PhoneNumber = normalizePhone(in.Header.PhoneNumber)
 
 	cache := storage.GetDeviceCache()
 	device, err := cache.GetDeviceByPhone(in.Header.PhoneNumber)
-	// 缓存不存在，说明设备不合法，需要返回错误，让服务层处理关闭
 	if errors.Is(err, storage.ErrDeviceNotFound) {
-		return errors.Wrapf(err, "Fail to find device cache, phoneNumber=%s", in.Header.PhoneNumber)
+		// Device reconnected after server restart (no prior 0x0100 in cache).
+		// Bootstrap a minimal device entry and accept the connection.
+		log.Warn().Str("phone", in.Header.PhoneNumber).Msg("Device sent 0x0102 without prior registration cache; bootstrapping device entry")
+		var sessionID string
+		var conn net.Conn
+		if sessionVal := ctx.Value(model.SessionCtxKey{}); sessionVal != nil {
+			if session, ok := sessionVal.(*model.Session); ok && session != nil {
+				sessionID = session.ID
+				conn = session.Conn
+			}
+		}
+		device = &model.Device{
+			Phone:           in.Header.PhoneNumber,
+			IMEI:            in.IMEI,
+			SoftwareVersion: in.SoftwareVersion,
+			AuthCode:        in.AuthCode,
+			SessionID:       sessionID,
+			Conn:            conn,
+			Keepalive:       time.Minute * 10,
+			LastestComTime:  time.Now(),
+			Status:          model.DeviceStatusOnline,
+			VersionDesc:     in.Header.Attr.VersionDesc,
+			ProtocolVersion: in.Header.ProtocolVersion,
+		}
+		cache.CacheDevice(device)
+		timer := NewKeepaliveTimer()
+		timer.Register(device.Phone)
+		out := data.Outgoing.(*model.Msg8001)
+		out.Result = model.ResultSuccess
+		return nil
 	}
 
 	out := data.Outgoing.(*model.Msg8001)
