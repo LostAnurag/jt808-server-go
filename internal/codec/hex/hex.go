@@ -73,8 +73,15 @@ func bcd2NumberStr(bcd []byte) string {
 //	8 -> 1000
 //	9 -> 1001
 func numberStr2BCD(number string) []byte {
+	// Round up to nearest even length so hex decode works cleanly.
+	// JT808-2013 phone is 6 bytes (12 BCD digits); 2019 is 10 bytes (20 BCD digits).
+	// Pad with leading 'f' nibbles to reach the next even length >= len(number).
+	targetLen := len(number)
+	if targetLen%2 != 0 {
+		targetLen++
+	}
 	var rNumber = number
-	for i := 0; i < 8-len(number); i++ {
+	for len(rNumber) < targetLen {
 		rNumber = "f" + rNumber
 	}
 	bcd := Str2Byte(rNumber)
