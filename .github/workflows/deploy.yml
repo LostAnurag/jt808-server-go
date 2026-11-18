@@ -1,0 +1,94 @@
+
+name: JT808 CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jt808-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build Linux binary
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" \
+            -o dist/jt808-server-go .
+
+      - name: Upload binary to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: dist/jt808-server-go
+          target: /tmp/
+          strip_components: 1
+
+      - name: Deploy and restart JT808
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -eu
+
+            APP_DIR=/home/ubuntu/jt808-server-go
+            NEW_BINARY=/tmp/jt808-server-go
+            BACKUP=$APP_DIR/jt808-server-go.previous
+
+            cd "$APP_DIR"
+
+            test -s "$NEW_BINARY"
+
+            echo "Backing up existing binary..."
+            cp -p jt808-server-go "$BACKUP"
+
+            echo "Installing new binary..."
+            install -m 755 "$NEW_BINARY" jt808-server-go.new
+            mv -f jt808-server-go.new jt808-server-go
+
+            echo "Restarting JT808 service..."
+
+            if sudo systemctl restart jt808.service; then
+              sleep 3
+
+              if sudo systemctl is-active --quiet jt808.service; then
+                echo "Deployment successful!"
+                rm -f "$NEW_BINARY"
+                exit 0
+              fi
+            fi
+
+            echo "Deployment failed. Rolling back..."
+
+            cp -f "$BACKUP" jt808-server-go
+            sudo systemctl restart jt808.service
+
+            sudo journalctl -u jt808.service -n 40 --no-pager || true
+
+            exit 1

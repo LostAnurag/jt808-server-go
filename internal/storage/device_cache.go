@@ -2,12 +2,17 @@ package storage
 
 import (
 	"errors"
+	"strings"
 	"sync"
 
 	"golang.org/x/exp/maps"
 
 	"github.com/fakeyanss/jt808-server-go/internal/protocol/model"
 )
+
+func normalizePhone(phone string) string {
+	return strings.TrimLeft(phone, "0")
+}
 
 var ErrDeviceNotFound = errors.New("device not found")
 
@@ -52,7 +57,7 @@ func (cache *DeviceCache) HasPlate(carPlate string) bool {
 func (cache *DeviceCache) GetDeviceByPhone(phone string) (*model.Device, error) {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
-	if d, ok := cache.cacheByPhone[phone]; ok {
+	if d, ok := cache.cacheByPhone[normalizePhone(phone)]; ok {
 		return d, nil
 	}
 	return nil, ErrDeviceNotFound
@@ -64,6 +69,7 @@ func (cache *DeviceCache) HasPhone(phone string) bool {
 }
 
 func (cache *DeviceCache) cacheDevice(d *model.Device) {
+	d.Phone = normalizePhone(d.Phone)
 	cache.cacheByPlate[d.Plate] = d
 	cache.cacheByPhone[d.Phone] = d
 }
@@ -99,5 +105,6 @@ func (cache *DeviceCache) DelDeviceByCarPlate(carPlate string) {
 func (cache *DeviceCache) DelDeviceByPhone(phone string) {
 	cache.mutex.Lock()
 	defer cache.mutex.Unlock()
-	cache.delDevice(nil, &phone)
+	np := normalizePhone(phone)
+	cache.delDevice(nil, &np)
 }

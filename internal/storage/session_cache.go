@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +60,7 @@ func GetSession(id string) (*model.Session, error) {
 
 // 通过设备手机号/ID获取活跃session
 func GetSessionByPhone(phone string) (*model.Session, error) {
+	phone = strings.TrimLeft(phone, "0")
 	c := getSessionCache()
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -79,6 +81,7 @@ func BindSessionPhone(sessionID, phone string) {
 	if sessionID == "" || phone == "" {
 		return
 	}
+	phone = strings.TrimLeft(phone, "0")
 	c := getSessionCache()
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
