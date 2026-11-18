@@ -413,6 +413,8 @@ func Run(serv *server.TCPServer, cfg *config.Config) {
 		})
 	})
 
+	router.Static("/ui", "./frontend")
+
 	httpAddr := ":" + cfg.Server.Port.HTTPPort
 
 	log.Debug().Msgf("Listening and serving HTTP on :%s", cfg.Server.Port.HTTPPort)
