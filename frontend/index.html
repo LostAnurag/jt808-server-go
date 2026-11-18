@@ -979,6 +979,7 @@ async function startCurrentStream() {
     const data = await res.json()
 
     isStreaming = true
+    if (window._streamRetryTimer) { clearInterval(window._streamRetryTimer); window._streamRetryTimer = null }
     document.getElementById('video-status-badge').className = 'ai-badge alert'
     document.getElementById('video-status-badge').textContent = 'LIVE'
     document.getElementById('v-rec-badge').className = 'rec-badge live'
@@ -1005,8 +1006,20 @@ async function startCurrentStream() {
       <div style="font-size:10px;color:#94a3b8;margin:4px 0;max-width:260px;text-align:center;">
         Dashcam connection dropped. Reconnect MDVR to port 8080.
       </div>
+      <button class="vbtn" onclick="startCurrentStream()" style="background:#1d4ed8;color:#bfdbfe;border-color:#3b82f6;margin-top:8px;padding:5px 14px;font-size:11px;flex:0;">🔄 Retry Stream</button>
     `
     stopCurrentStream(false)
+    // Auto-retry every 10s while device panel is visible
+    if (!window._streamRetryTimer) {
+      window._streamRetryTimer = setInterval(function() {
+        if (!isStreaming && document.getElementById('video-panel').style.display !== 'none') {
+          startCurrentStream()
+        } else if (isStreaming) {
+          clearInterval(window._streamRetryTimer)
+          window._streamRetryTimer = null
+        }
+      }, 10000)
+    }
   }
 }
 
