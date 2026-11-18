@@ -350,11 +350,11 @@ func processMsg0102(_ context.Context, data *model.ProcessData) error {
 func genAuthCode(d *model.Device) string {
 	var splitByte byte = '_'
 	codeBuilder := new(strings.Builder)
-	codeBuilder.WriteString(d.ID)
+	codeBuilder.WriteString(strings.TrimRight(d.ID, "\x00"))
 	codeBuilder.WriteByte(splitByte)
-	codeBuilder.WriteString(d.Plate)
+	codeBuilder.WriteString(strings.TrimRight(d.Plate, "\x00"))
 	codeBuilder.WriteByte(splitByte)
-	codeBuilder.WriteString(d.Phone)
+	codeBuilder.WriteString(strings.TrimRight(d.Phone, "\x00"))
 	return strconv.Itoa(int(hash.FNV32(codeBuilder.String())))
 }
 

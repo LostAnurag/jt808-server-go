@@ -2,6 +2,7 @@ package model
 
 import (
 	"net"
+	"strings"
 	"time"
 
 	"github.com/fakeyanss/jt808-server-go/internal/codec/hex"
@@ -41,8 +42,8 @@ type Device struct {
 
 func NewDevice(in *Msg0100, session *Session) *Device {
 	return &Device{
-		ID:              in.DeviceID,
-		Plate:           in.PlateNumber,
+		ID:              strings.TrimRight(in.DeviceID, "\x00"),
+		Plate:           strings.TrimRight(in.PlateNumber, "\x00"),
 		Phone:           in.Header.PhoneNumber,
 		SessionID:       session.ID,
 		TransProto:      session.GetTransProto(),
