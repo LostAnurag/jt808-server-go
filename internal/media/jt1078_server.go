@@ -34,8 +34,6 @@ type StreamBroadcaster struct {
 	lastTag         []byte
 	lastPacketAt    time.Time
 	packetCount     uint64
-	frameCount      uint64
-	dts             uint32
 }
 
 // MediaHub coordinates all live video streams and subscriber connections.
@@ -56,18 +54,16 @@ func GetMediaHub() *MediaHub {
 func (h *MediaHub) getOrCreate(streamKey string) *StreamBroadcaster {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
 	b, ok := h.streams[streamKey]
 	if !ok {
-		b = &StreamBroadcaster{
-			subscribers: make(map[chan []byte]struct{}),
-		}
+		b = &StreamBroadcaster{subscribers: make(map[chan []byte]struct{})}
 		h.streams[streamKey] = b
 	}
 	return b
 }
 
 // Subscribe attaches a new subscriber channel to the given stream.
+// Returns the channel, cached sequence header tag, cached last keyframe tag, and an unsubscribe func.
 func (h *MediaHub) Subscribe(streamKey string) (chan []byte, []byte, []byte, func()) {
 	b := h.getOrCreate(streamKey)
 	ch := make(chan []byte, 256)
@@ -84,11 +80,10 @@ func (h *MediaHub) Subscribe(streamKey string) (chan []byte, []byte, []byte, fun
 		close(ch)
 		b.mu.Unlock()
 	}
-
 	return ch, seqTag, kfTag, unsub
 }
 
-// GetSeqHeaderTag returns a copy of the cached AVC sequence header tag for the stream, if available.
+// GetSeqHeaderTag returns a copy of the cached AVC sequence header tag for the stream.
 func (h *MediaHub) GetSeqHeaderTag(streamKey string) []byte {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -140,33 +135,30 @@ func (h *MediaHub) Broadcast(streamKey string, tag []byte, isKeyframe bool, sps,
 		select {
 		case ch <- tag:
 		default:
-			// Drop frame if subscriber buffer is full to prevent backpressure
 		}
 	}
 }
 
-// HasActiveStream returns true only if the stream has received a keyframe within the last 15 seconds.
-// P-frame-only streams are not considered active for retry purposes.
+// HasActiveStream returns true if the stream received a keyframe within the last 15 seconds.
 func (h *MediaHub) HasActiveStream(streamKey string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-
 	b, ok := h.streams[streamKey]
 	if !ok {
 		return false
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-
 	return len(b.lastKeyframeTag) > 0 && time.Since(b.lastPacketAt) < 15*time.Second
 }
 
-// FrameAssembler buffers and reassembles fragmented JT1078 RTP sub-packets.
-// JT1078 Table 19 defines sub-packet indicators (low 4 bits of byte 15):
-// 0000 = Atomic (single complete frame)
-// 0001 = First sub-packet of a multi-packet frame
-// 0010 = Last sub-packet of a multi-packet frame
-// 0011 = Intermediate sub-packet
+// FrameAssembler reassembles fragmented JT1078 sub-packets into complete frames.
+// JT/T 1078 sub-packet indicator (low 4 bits of byte 15):
+//
+//	0 = atomic (complete frame)
+//	1 = first sub-packet
+//	2 = last sub-packet
+//	3 = intermediate sub-packet
 type FrameAssembler struct {
 	mu      sync.Mutex
 	buffers map[string]*frameBuffer
@@ -178,12 +170,10 @@ type frameBuffer struct {
 }
 
 func newFrameAssembler() *FrameAssembler {
-	return &FrameAssembler{
-		buffers: make(map[string]*frameBuffer),
-	}
+	return &FrameAssembler{buffers: make(map[string]*frameBuffer)}
 }
 
-func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe bool, payload []byte) (completeData []byte, isFullKeyframe bool) {
+func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe bool, payload []byte) ([]byte, bool) {
 	fa.mu.Lock()
 	defer fa.mu.Unlock()
 
@@ -194,15 +184,13 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 	}
 
 	switch subPacket {
-	case 0: // Atomic packet - never touches buffer
+	case 0: // atomic
 		return payload, isKeyframe
-
-	case 1: // First sub-packet - reset and start accumulating
+	case 1: // first
 		buf.data = append(buf.data[:0], payload...)
 		buf.isKeyframe = isKeyframe
 		return nil, false
-
-	case 3: // Intermediate sub-packet
+	case 3: // middle
 		if len(buf.data) > 0 {
 			if len(buf.data)+len(payload) > 1024*1024 {
 				buf.data = buf.data[:0]
@@ -211,8 +199,7 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 			buf.data = append(buf.data, payload...)
 		}
 		return nil, false
-
-	case 2: // Last sub-packet
+	case 2: // last
 		if len(buf.data) > 0 {
 			buf.data = append(buf.data, payload...)
 			res := make([]byte, len(buf.data))
@@ -222,33 +209,27 @@ func (fa *FrameAssembler) Assemble(streamKey string, subPacket byte, isKeyframe 
 			return res, kf
 		}
 		return nil, false
-
 	default:
 		return payload, isKeyframe
 	}
 }
 
-// JT1078Server represents the JT/T 1078 real-time video RTP ingestion server.
+// JT1078Server is the JT/T 1078 RTP media ingestion server.
 type JT1078Server struct {
-	tcpPort   string
-	udpPort   string
-	listener  net.Listener
-	udpConn   *net.UDPConn
-	hub       *MediaHub
-	assembler *FrameAssembler
-
-	dtsMu     sync.Mutex
-	streamDTS map[string]uint32
-	cachedSPS map[string][]byte
-	cachedPPS map[string][]byte
-
-	// dedup: track last processed serial per streamKey to drop duplicate frames
-	// from multiple TCP connections sending the same stream
-	dedupMu   sync.Mutex
+	tcpPort    string
+	udpPort    string
+	listener   net.Listener
+	udpConn    *net.UDPConn
+	hub        *MediaHub
+	assembler  *FrameAssembler
+	dtsMu      sync.Mutex
+	streamDTS  map[string]uint32
+	cachedSPS  map[string][]byte
+	cachedPPS  map[string][]byte
+	dedupMu    sync.Mutex
 	lastSerial map[string]uint16
 }
 
-// NewJT1078Server creates a new JT1078 media server instance.
 func NewJT1078Server(tcpPort, udpPort string) *JT1078Server {
 	if tcpPort == "" {
 		tcpPort = "1078"
@@ -268,24 +249,21 @@ func NewJT1078Server(tcpPort, udpPort string) *JT1078Server {
 	}
 }
 
-// Start begins listening for JT1078 TCP and UDP connections on the configured port.
 func (s *JT1078Server) Start() error {
 	addr := ":" + s.tcpPort
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Error().Err(err).Str("addr", addr).Msg("Failed to start JT1078 RTP TCP listener")
+		log.Error().Err(err).Str("addr", addr).Msg("Failed to start JT1078 TCP listener")
 		return err
 	}
 	s.listener = ln
-	log.Info().Str("addr", addr).Msg("JT1078 RTP Media Server listening on TCP port")
+	log.Info().Str("addr", addr).Msg("JT1078 RTP Media Server listening on TCP")
 
-	// Start UDP Listener on the same port
 	udpAddr, err := net.ResolveUDPAddr("udp", ":"+s.udpPort)
 	if err == nil {
-		uConn, err := net.ListenUDP("udp", udpAddr)
-		if err == nil {
+		if uConn, err := net.ListenUDP("udp", udpAddr); err == nil {
 			s.udpConn = uConn
-			log.Info().Str("addr", ":"+s.udpPort).Msg("JT1078 RTP Media Server listening on UDP port")
+			log.Info().Str("addr", ":"+s.udpPort).Msg("JT1078 RTP Media Server listening on UDP")
 			routines.GoSafe(func() { s.handleUDP() })
 		}
 	}
@@ -297,19 +275,15 @@ func (s *JT1078Server) Start() error {
 				if strings.Contains(err.Error(), "use of closed network connection") {
 					return
 				}
-				log.Warn().Err(err).Msg("Error accepting JT1078 TCP connection")
+				log.Warn().Err(err).Msg("JT1078 TCP accept error")
 				continue
 			}
-			routines.GoSafe(func() {
-				s.handleTCPConnection(conn)
-			})
+			routines.GoSafe(func() { s.handleTCPConn(conn) })
 		}
 	})
-
 	return nil
 }
 
-// Close stops the server listeners.
 func (s *JT1078Server) Close() error {
 	if s.listener != nil {
 		_ = s.listener.Close()
@@ -320,7 +294,6 @@ func (s *JT1078Server) Close() error {
 	return nil
 }
 
-// handleUDP processes incoming JT1078 RTP datagrams.
 func (s *JT1078Server) handleUDP() {
 	buf := make([]byte, 65536)
 	for {
@@ -328,202 +301,193 @@ func (s *JT1078Server) handleUDP() {
 		if err != nil {
 			return
 		}
-		if n >= 30 {
+		if n >= 16 {
 			log.Debug().Str("remote", addr.String()).Int("len", n).Msg("JT1078 UDP packet received")
-			s.processSinglePacket(buf[:n])
+			s.dispatchPacket(buf[:n])
 		}
 	}
 }
 
-// handleTCPConnection processes incoming stream of JT1078 RTP packets.
-func (s *JT1078Server) handleTCPConnection(conn net.Conn) {
+// JT/T 1078-2016 Table 19 — RTP header layout:
+//
+// Common prefix (16 bytes):
+//   [0-3]  sync word: 0x30 0x31 0x63 0x64
+//   [4]    simulation type
+//   [5]    version
+//   [6-7]  sequence number (uint16 BE)
+//   [8-13] SIM card number (6 bytes BCD)
+//   [14]   logical channel number
+//   [15]   data type (high 4 bits) | sub-packet (low 4 bits)
+//
+// Video frame (dataType 0/1/2 — I/P/B):
+//   [16-19] timestamp (uint32 BE, milliseconds)
+//   [20-23] last I-frame interval (uint32 BE)
+//   [24-25] last frame interval (uint16 BE)
+//   [26-27] body length (uint16 BE)   → total header = 28 bytes
+//
+// Audio frame (dataType 3):
+//   [16-19] timestamp (uint32 BE, ms)
+//   [20-21] body length (uint16 BE)   → total header = 22 bytes
+//
+// Transparent data (dataType 4):
+//   [16-17] body length (uint16 BE)   → total header = 18 bytes
+func parseHeader(buf []byte) (headerLen, bodyLen int, ok bool) {
+	if len(buf) < 16 {
+		return 0, 0, false
+	}
+	dt := (buf[15] >> 4) & 0x0F
+	switch dt {
+	case 0, 1, 2:
+		if len(buf) < 28 {
+			return 0, 0, false
+		}
+		return 28, int(binary.BigEndian.Uint16(buf[26:28])), true
+	case 3:
+		if len(buf) < 22 {
+			return 0, 0, false
+		}
+		return 22, int(binary.BigEndian.Uint16(buf[20:22])), true
+	case 4:
+		if len(buf) < 18 {
+			return 0, 0, false
+		}
+		return 18, int(binary.BigEndian.Uint16(buf[16:18])), true
+	default:
+		return 0, 0, false
+	}
+}
+
+func (s *JT1078Server) handleTCPConn(conn net.Conn) {
 	defer conn.Close()
-	remoteAddr := conn.RemoteAddr().String()
-	log.Info().Str("remote", remoteAddr).Msg("New JT1078 RTP video stream connected")
+	remote := conn.RemoteAddr().String()
+	log.Info().Str("remote", remote).Msg("New JT1078 TCP connection")
 
 	buf := make([]byte, 65536)
-	streamBuf := make([]byte, 0, 262144)
+	stream := make([]byte, 0, 262144)
 
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if err != io.EOF {
-				log.Debug().Err(err).Str("remote", remoteAddr).Msg("JT1078 TCP connection closed")
+				log.Debug().Err(err).Str("remote", remote).Msg("JT1078 TCP connection closed")
 			}
 			break
 		}
 		if n == 0 {
 			continue
 		}
+		stream = append(stream, buf[:n]...)
 
-		streamBuf = append(streamBuf, buf[:n]...)
-
-		// Scan for JT1078 sync packet header: 0x30 0x31 0x63 0x64 ("01cd")
-		for len(streamBuf) >= 30 {
+		for len(stream) >= 16 {
+			// Find sync word
 			idx := -1
-			for i := 0; i <= len(streamBuf)-4; i++ {
-				if streamBuf[i] == 0x30 && streamBuf[i+1] == 0x31 && streamBuf[i+2] == 0x63 && streamBuf[i+3] == 0x64 {
+			for i := 0; i <= len(stream)-4; i++ {
+				if stream[i] == 0x30 && stream[i+1] == 0x31 && stream[i+2] == 0x63 && stream[i+3] == 0x64 {
 					idx = i
 					break
 				}
 			}
-
 			if idx < 0 {
-				if len(streamBuf) > 3 {
-					streamBuf = streamBuf[len(streamBuf)-3:]
+				if len(stream) > 3 {
+					stream = stream[len(stream)-3:]
 				}
 				break
 			}
-
 			if idx > 0 {
-				streamBuf = streamBuf[idx:]
+				stream = stream[idx:]
 			}
 
-			if len(streamBuf) < 30 {
-				break
+			hLen, bLen, ok := parseHeader(stream)
+			if !ok {
+				break // need more data
+			}
+			total := hLen + bLen
+			if len(stream) < total {
+				break // need more data
 			}
 
-			// Standard JT1078 Video frame (I, P, B frame): Header length is 30 bytes, body length offset is 28.
-			// JT/T 1078 Table 19:
-			// Bytes 0..3: 0x30 0x31 0x63 0x64
-			// Bytes 15: DataType (high 4 bits) & SubPacket (low 4 bits)
-			// Bytes 24..25: Last I-frame interval (2 bytes)
-			// Bytes 26..27: Previous frame interval (2 bytes)
-			// Bytes 28..29: Body Length (2 bytes)
-			headerLen := 30
-			bodyLenOffset := 28
-
-			dataType := (streamBuf[15] >> 4) & 0x0F
-			if dataType == 3 {
-				// Audio frame: no interval fields (26 bytes header)
-				headerLen = 26
-				bodyLenOffset = 24
-			} else if dataType == 4 {
-				// Transparent data: no timestamp/intervals (18 bytes header)
-				headerLen = 18
-				bodyLenOffset = 16
-			} else if len(streamBuf) >= 34 {
-				// Non-standard vendor fallback check: if NALU start code is at offset 28
-				if streamBuf[28] == 0 && streamBuf[29] == 0 && (streamBuf[30] == 1 || (streamBuf[30] == 0 && streamBuf[31] == 1)) {
-					headerLen = 28
-					bodyLenOffset = 26
-				}
-			}
-
-			if len(streamBuf) < headerLen {
-				break
-			}
-
-			bodyLen := int(binary.BigEndian.Uint16(streamBuf[bodyLenOffset : bodyLenOffset+2]))
-			totalPacketLen := headerLen + bodyLen
-			if len(streamBuf) < totalPacketLen {
-				// Wait for remainder of packet data
-				break
-			}
-
-			packet := streamBuf[:totalPacketLen]
-			s.dispatchParsedPacket(packet, headerLen)
-			streamBuf = streamBuf[totalPacketLen:]
+			s.dispatchPacket(stream[:total])
+			stream = stream[total:]
 		}
 	}
 }
 
-// processSinglePacket processes a single standalone JT1078 datagram (UDP or extracted chunk).
-func (s *JT1078Server) processSinglePacket(packet []byte) {
-	if len(packet) < 30 {
+// dispatchPacket validates sync word, parses header, and routes to dispatchParsedPacket.
+func (s *JT1078Server) dispatchPacket(packet []byte) {
+	if len(packet) < 16 {
 		return
 	}
 	if packet[0] != 0x30 || packet[1] != 0x31 || packet[2] != 0x63 || packet[3] != 0x64 {
 		return
 	}
-
-	headerLen := 30
-	dataType := (packet[15] >> 4) & 0x0F
-	if dataType == 3 {
-		headerLen = 26
-	} else if dataType == 4 {
-		headerLen = 18
-	} else if len(packet) >= 34 {
-		if packet[28] == 0 && packet[29] == 0 && (packet[30] == 1 || (packet[30] == 0 && packet[31] == 1)) {
-			headerLen = 28
-		}
+	hLen, _, ok := parseHeader(packet)
+	if !ok {
+		return
 	}
-	s.dispatchParsedPacket(packet, headerLen)
+	s.dispatchParsedPacket(packet, hLen)
 }
 
-// dispatchParsedPacket decodes phone, channel, reassembles frame slices, and muxes to FLV.
+var (
+	dtDesc = map[byte]string{0: "I-frame", 1: "P-frame", 2: "B-frame", 3: "Audio", 4: "Transparent"}
+	spDesc = map[byte]string{0: "Atomic", 1: "First", 2: "Last", 3: "Middle"}
+)
+
 func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 	if len(packet) <= headerLen {
 		return
 	}
 
-	phoneBytes := packet[8:14]
+	// Parse phone from bytes 8-13 (6-byte BCD)
 	phoneIdx := 0
-	rawPhone := hex.ReadBCD(phoneBytes, &phoneIdx, 6)
+	rawPhone := hex.ReadBCD(packet[8:14], &phoneIdx, 6)
 	cleanPhone := strings.TrimLeft(rawPhone, "0")
 	channel := packet[14]
-
 	flagByte := packet[15]
 	dataType := (flagByte >> 4) & 0x0F
 	subPacket := flagByte & 0x0F
+	serial := binary.BigEndian.Uint16(packet[6:8])
 
-	dataTypeDesc := map[byte]string{
-		0: "I-frame", 1: "P-frame", 2: "B-frame",
-		3: "Audio", 4: "Transparent",
+	// Timestamp: bytes 16-19 (uint32 BE, milliseconds) — present for video and audio
+	var tsMs uint32
+	if headerLen >= 22 {
+		tsMs = binary.BigEndian.Uint32(packet[16:20])
 	}
-	subPacketDesc := map[byte]string{
-		0: "Atomic", 1: "First", 2: "Last", 3: "Middle",
-	}
-
-	// Read RTP timestamp (bytes 16..23, 8 bytes, 90kHz clock)
-	var rtpTs uint64
-	if len(packet) >= 24 {
-		for i := 16; i < 24; i++ {
-			rtpTs = rtpTs<<8 | uint64(packet[i])
-		}
-	}
-	serial := uint16(packet[6])<<8 | uint16(packet[7])
-	bodyLen := len(packet) - headerLen
 
 	log.Debug().
 		Str("phone", cleanPhone).
 		Uint8("channel", channel).
-		Str("dataType", dataTypeDesc[dataType]).
-		Str("subPacket", subPacketDesc[subPacket]).
+		Str("dataType", dtDesc[dataType]).
+		Str("subPacket", spDesc[subPacket]).
 		Uint16("serial", serial).
-		Uint64("timestamp", rtpTs).
-		Int("bodyLen", bodyLen).
+		Uint32("tsMs", tsMs).
+		Int("bodyLen", len(packet)-headerLen).
 		Hex("header", packet[:headerLen]).
-		Msg("JT1078 packet received")
+		Msg("JT1078 packet")
 
-	payload := packet[headerLen:]
-
-	// Video payloads only (0=I-frame, 1=P-frame, 2=B-frame)
+	// Only process video frames (I=0, P=1, B=2)
 	if dataType > 2 {
 		return
 	}
 
-	isKeyframe := (dataType == 0)
+	isKeyframe := dataType == 0
 	streamKey := StreamKey(cleanPhone, channel)
 
-	// Deduplicate: multiple TCP connections send the same stream.
-	// Only process the first connection that sends each serial number.
+	// Dedup: drop frames with same serial already processed (duplicate TCP connections)
 	s.dedupMu.Lock()
-	last, seen := s.lastSerial[streamKey]
-	if seen && serial == last && subPacket != 1 {
-		// Same serial from a different connection - drop duplicate
+	if last, seen := s.lastSerial[streamKey]; seen && serial == last && subPacket != 1 {
 		s.dedupMu.Unlock()
 		return
 	}
-	if subPacket == 1 || subPacket == 0 {
+	if subPacket == 0 || subPacket == 1 {
 		s.lastSerial[streamKey] = serial
 	}
 	s.dedupMu.Unlock()
 
-	// Reassemble fragmented multi-packet frames
+	payload := packet[headerLen:]
+
 	completePayload, isCompleteKF := s.assembler.Assemble(streamKey, subPacket, isKeyframe, payload)
 	if len(completePayload) == 0 {
-		return // Waiting for remaining sub-packets of this frame
+		return
 	}
 
 	nalus := ExtractNALUs(completePayload)
@@ -532,57 +496,54 @@ func (s *JT1078Server) dispatchParsedPacket(packet []byte, headerLen int) {
 	}
 
 	s.dtsMu.Lock()
-	var sps = s.cachedSPS[streamKey]
-	var pps = s.cachedPPS[streamKey]
+	sps := s.cachedSPS[streamKey]
+	pps := s.cachedPPS[streamKey]
 
 	for _, n := range nalus {
-		nt := GetNALUType(n)
-		if nt == NALUTypeSPS {
+		switch GetNALUType(n) {
+		case NALUTypeSPS:
 			sps = n
 			s.cachedSPS[streamKey] = n
-		} else if nt == NALUTypePPS {
+		case NALUTypePPS:
 			pps = n
 			s.cachedPPS[streamKey] = n
-		} else if nt == NALUTypeIDR {
+		case NALUTypeIDR:
 			isCompleteKF = true
 		}
 	}
 
-	// Convert 90kHz RTP timestamp to milliseconds for FLV DTS.
+	// Compute DTS relative to stream start (timestamp is already in ms)
 	baseKey := streamKey + "_base"
 	base, hasBase := s.streamDTS[baseKey]
 	var dts uint32
-	rtpMs := uint32(rtpTs / 90)
 	if !hasBase || base == 0 {
-		s.streamDTS[baseKey] = rtpMs
+		s.streamDTS[baseKey] = tsMs
 		dts = 0
+	} else if tsMs >= base {
+		dts = tsMs - base
 	} else {
-		if rtpMs >= base {
-			dts = rtpMs - base
-		} else {
-			dts = 0
-		}
+		// Timestamp reset/wrap — rebase
+		s.streamDTS[baseKey] = tsMs
+		dts = 0
 	}
 	s.dtsMu.Unlock()
 
-	// For keyframes, only broadcast if we have SPS+PPS (needed for sequence header)
 	if isCompleteKF && (len(sps) == 0 || len(pps) == 0) {
-		log.Warn().Str("streamKey", streamKey).Msg("I-frame received but no SPS/PPS cached yet, dropping")
+		log.Warn().Str("streamKey", streamKey).Msg("I-frame received but SPS/PPS not yet cached, dropping")
 		return
 	}
 
 	flvPayload := FormatNALUsForFLV(nalus)
 	tag := MakeVideoTag(isCompleteKF, false, dts, flvPayload)
 
-	// Broadcast to both clean and raw phone stream keys
 	s.hub.Broadcast(StreamKey(cleanPhone, channel), tag, isCompleteKF, sps, pps)
 	if rawPhone != cleanPhone {
 		s.hub.Broadcast(StreamKey(rawPhone, channel), tag, isCompleteKF, sps, pps)
 	}
 }
 
-// HandleHTTPFLV serves live HTTP-FLV streams to web browsers and video players.
-// Endpoint: GET /live/:stream (e.g. /live/377077047531_1.flv or /live/test.flv)
+// HandleHTTPFLV serves live HTTP-FLV streams.
+// GET /live/:stream  e.g. /live/377077047531_1.flv  or  /live/test.flv?test=true
 func HandleHTTPFLV(c *gin.Context) {
 	streamParam := c.Param("stream")
 	streamKey := strings.TrimSuffix(streamParam, ".flv")
@@ -593,39 +554,32 @@ func HandleHTTPFLV(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("Access-Control-Allow-Origin", "*")
 
-	// 1. Write standard FLV Header (13 bytes)
 	c.Writer.WriteHeader(http.StatusOK)
-	_, err := c.Writer.Write(FLVHeader(false))
-	if err != nil {
+	if _, err := c.Writer.Write(FLVHeader(false)); err != nil {
 		return
 	}
 	c.Writer.Flush()
 
-	hub := GetMediaHub()
-
-	// If explicit test mode requested, stream synthetic AVC pattern
 	if isTest {
 		streamTestPattern(c)
 		return
 	}
 
-	// 2. Subscribe to live stream from MediaHub
+	hub := GetMediaHub()
 	tagChan, seqHeaderTag, lastKeyframeTag, unsubscribe := hub.Subscribe(streamKey)
 	defer unsubscribe()
 
 	var sentSeqHeader bool
 	var baseDTS uint32
 	var hasBaseDTS bool
-	var waitingForKeyframe = true
+	waitingForKeyframe := true
 
-	// If we already have cached SPS/PPS, send AVC Sequence Header tag immediately
 	if len(seqHeaderTag) > 0 {
 		_, _ = c.Writer.Write(seqHeaderTag)
 		c.Writer.Flush()
 		sentSeqHeader = true
 	}
 
-	// If we have a cached keyframe, send it immediately so player renders instantly
 	if sentSeqHeader && len(lastKeyframeTag) > 0 {
 		kfTag := make([]byte, len(lastKeyframeTag))
 		copy(kfTag, lastKeyframeTag)
@@ -657,7 +611,6 @@ func HandleHTTPFLV(c *gin.Context) {
 			}
 			timeout.Reset(15 * time.Second)
 
-			// Sequence Header (AVCPacketType == 0)
 			if IsSequenceHeaderTag(tag) {
 				_, _ = c.Writer.Write(tag)
 				c.Writer.Flush()
@@ -665,11 +618,9 @@ func HandleHTTPFLV(c *gin.Context) {
 				continue
 			}
 
-			// Ensure Sequence Header was sent before any video frames
 			if !sentSeqHeader {
-				hubSeqTag := hub.GetSeqHeaderTag(streamKey)
-				if len(hubSeqTag) > 0 {
-					_, _ = c.Writer.Write(hubSeqTag)
+				if hubSeq := hub.GetSeqHeaderTag(streamKey); len(hubSeq) > 0 {
+					_, _ = c.Writer.Write(hubSeq)
 					c.Writer.Flush()
 					sentSeqHeader = true
 				} else {
@@ -677,16 +628,13 @@ func HandleHTTPFLV(c *gin.Context) {
 				}
 			}
 
-			// Wait for Keyframe if not yet synchronized
-			isKF := IsKeyframeTag(tag)
 			if waitingForKeyframe {
-				if !isKF {
-					continue // Discard P-frames until the first I-frame arrives
+				if !IsKeyframeTag(tag) {
+					continue
 				}
 				waitingForKeyframe = false
 			}
 
-			// Normalize DTS so stream starts at 0 for this client
 			tagDTS := GetTagDTS(tag)
 			if !hasBaseDTS {
 				baseDTS = tagDTS
@@ -702,21 +650,17 @@ func HandleHTTPFLV(c *gin.Context) {
 			copy(outTag, tag)
 			SetTagDTS(outTag, clientDTS)
 
-			_, err := c.Writer.Write(outTag)
-			if err != nil {
+			if _, err := c.Writer.Write(outTag); err != nil {
 				return
 			}
 			c.Writer.Flush()
 
 		case <-timeout.C:
-			// No data received within timeout
 			return
 		}
 	}
 }
 
-// streamTestPattern generates a continuous, standard-compliant H.264 FLV stream
-// (128x96 color-cycling frames at 25 fps) to allow immediate browser verification.
 func streamTestPattern(c *gin.Context) {
 	seqTag := MakeAVCSequenceHeaderTag(TestSPS, TestPPS, 0)
 	if len(seqTag) > 0 {
@@ -724,7 +668,7 @@ func streamTestPattern(c *gin.Context) {
 		c.Writer.Flush()
 	}
 
-	ticker := time.NewTicker(40 * time.Millisecond) // 25 fps
+	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 
 	clientGone := c.Request.Context().Done()
@@ -737,20 +681,14 @@ func streamTestPattern(c *gin.Context) {
 			return
 		case <-ticker.C:
 			dts += 40
-			isKeyframe := (frameIdx % 25 == 0)
-
-			var slice []byte
+			isKeyframe := frameIdx%25 == 0
+			slice := TestPSlice
 			if isKeyframe {
 				slice = TestIDRSlice
-			} else {
-				slice = TestPSlice
 			}
-
 			flvPayload := FormatNALUsForFLV([][]byte{slice})
 			tag := MakeVideoTag(isKeyframe, false, dts, flvPayload)
-
-			_, err := c.Writer.Write(tag)
-			if err != nil {
+			if _, err := c.Writer.Write(tag); err != nil {
 				return
 			}
 			c.Writer.Flush()
